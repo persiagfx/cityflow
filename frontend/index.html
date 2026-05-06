@@ -107,6 +107,96 @@
 
             </div>
 
+            <!-- Visual Settings Panel -->
+            <div id="settings-box" class="border-bottom pb-2 mt-1">
+                <h5 class="mt-3 mb-2 d-flex justify-content-between align-items-center"
+                    id="settings-toggle" style="cursor:pointer">
+                    <span><i class="fas fa-sliders-h mr-1"></i> Visual Settings</span>
+                    <i class="fas fa-chevron-down" id="settings-chevron"></i>
+                </h5>
+                <div id="settings-content">
+
+                    <!-- Car Colors -->
+                    <p class="mb-1 small font-weight-bold text-muted text-uppercase">Car Colors</p>
+                    <div class="d-flex flex-wrap mb-3">
+                        <div class="text-center mr-2 mb-1">
+                            <input type="color" id="car-color-0" style="width:32px;height:26px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer;display:block">
+                            <small style="font-size:10px">C1</small>
+                        </div>
+                        <div class="text-center mr-2 mb-1">
+                            <input type="color" id="car-color-1" style="width:32px;height:26px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer;display:block">
+                            <small style="font-size:10px">C2</small>
+                        </div>
+                        <div class="text-center mr-2 mb-1">
+                            <input type="color" id="car-color-2" style="width:32px;height:26px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer;display:block">
+                            <small style="font-size:10px">C3</small>
+                        </div>
+                        <div class="text-center mr-2 mb-1">
+                            <input type="color" id="car-color-3" style="width:32px;height:26px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer;display:block">
+                            <small style="font-size:10px">C4</small>
+                        </div>
+                        <div class="text-center mb-1">
+                            <input type="color" id="car-color-4" style="width:32px;height:26px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer;display:block">
+                            <small style="font-size:10px">C5</small>
+                        </div>
+                    </div>
+
+                    <!-- Car Size -->
+                    <p class="mb-1 small font-weight-bold text-muted text-uppercase">Car Size</p>
+                    <div class="form-check mb-1">
+                        <input class="form-check-input" type="checkbox" id="car-size-override">
+                        <label class="form-check-label small" for="car-size-override">Override simulation values</label>
+                    </div>
+                    <div id="car-size-controls" class="d-none mb-3">
+                        <div class="input-group input-group-sm mb-1">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text" style="font-size:11px">Length</span>
+                            </div>
+                            <input type="number" id="car-length-input" class="form-control" min="1" max="30" step="0.5" value="5">
+                        </div>
+                        <div class="input-group input-group-sm">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text" style="font-size:11px">Width&nbsp;</span>
+                            </div>
+                            <input type="number" id="car-width-input" class="form-control" min="0.5" max="10" step="0.5" value="2">
+                        </div>
+                    </div>
+
+                    <!-- Lane Width Scale -->
+                    <p class="mb-1 small font-weight-bold text-muted text-uppercase">Lane Width</p>
+                    <div class="row no-gutters align-items-center mb-3">
+                        <div class="col-8">
+                            <input type="range" class="custom-range" id="lane-width-scale" min="50" max="300" value="100">
+                        </div>
+                        <div class="col-4 text-right pl-1">
+                            <span id="lane-width-scale-val" class="small">1.00</span><small>x</small>
+                        </div>
+                    </div>
+
+                    <!-- Scene Colors -->
+                    <p class="mb-1 small font-weight-bold text-muted text-uppercase">Scene Colors</p>
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <small>Background</small>
+                        <input type="color" id="bg-color" value="#e8ebed"
+                               style="width:32px;height:22px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer">
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <small>Road</small>
+                        <input type="color" id="road-color" value="#586970"
+                               style="width:32px;height:22px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer">
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <small>Lane Divider</small>
+                        <input type="color" id="lane-inner-color" value="#bed8e8"
+                               style="width:32px;height:22px;padding:1px;border:1px solid #ccc;border-radius:3px;cursor:pointer">
+                    </div>
+
+                    <button class="btn btn-sm btn-primary w-100 mb-1" id="apply-road-settings">
+                        <i class="fas fa-sync-alt mr-1"></i>Apply Road Settings
+                    </button>
+                </div>
+            </div>
+
             <h5 class="mt-4">Info Box</h5>
             <div id="info" class="alert alert-light border">
             </div>

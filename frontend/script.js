@@ -25,6 +25,12 @@ CAR_COLORS = [0xf2bfd7, // pink
             0xd4b5f5];
 CAR_COLORS_NUM = CAR_COLORS.length;
 
+// Visual settings — controlled by the Settings panel in the UI
+var LANE_WIDTH_SCALE  = 1.0;
+var CAR_SIZE_OVERRIDE = false;
+var CAR_LENGTH_CUSTOM = 5;
+var CAR_WIDTH_CUSTOM  = 2;
+
 NUM_CAR_POOL = 150000;
 
 LIGHT_RED = 0xdb635e;
@@ -332,7 +338,7 @@ function drawRoadnet() {
     simulatorContainer = new Container();
     viewport.addChild(simulatorContainer);
 
-    roadnet = simulation.static;
+    roadnet = JSON.parse(JSON.stringify(simulation.static));
     nodes = [];
     edges = [];
     trafficLightsG = {};
@@ -539,8 +545,9 @@ function drawEdge(edge, graphics) {
     let pointA, pointAOffset, pointB, pointBOffset;
     let prevPointBOffset = null;
 
+    let scaledLaneWidths = edge.laneWidths.map(w => w * LANE_WIDTH_SCALE);
     let roadWidth = 0;
-    edge.laneWidths.forEach(function(l){
+    scaledLaneWidths.forEach(function(l){
         roadWidth += l;
     }, 0);
 
@@ -573,7 +580,7 @@ function drawEdge(edge, graphics) {
             edgeTrafficLights = [];
             prevOffset = offset = 0;
             for (lane = 0;lane < edge.nLane;++lane) {
-                offset += edge.laneWidths[lane];
+                offset += scaledLaneWidths[lane];
                 var light = new Sprite(lightTexture);
                 light.anchor.set(0, 0.5);
                 light.scale.set(offset - prevOffset, 1);
@@ -605,12 +612,12 @@ function drawEdge(edge, graphics) {
 
         offset = 0;
         for (let lane = 0, len = edge.nLane-1;lane < len;++lane) {
-            offset += edge.laneWidths[lane];
+            offset += scaledLaneWidths[lane];
             graphics.lineStyle(LANE_BORDER_WIDTH, LANE_INNER_COLOR);
             graphics.drawDashLine(pointA.moveAlong(pointAOffset, offset), pointB.moveAlong(pointBOffset, offset), LANE_DASH, LANE_GAP);
         }
 
-        offset += edge.laneWidths[edge.nLane-1];
+        offset += scaledLaneWidths[edge.nLane-1];
 
         // graphics.lineStyle(LANE_BORDER_WIDTH, LANE_BORDER_COLOR);
         // graphics.drawLine(pointA.moveAlong(pointAOffset, offset), pointB.moveAlong(pointBOffset, offset));
@@ -716,16 +723,16 @@ function drawStep(step) {
         carPool[i][0].name = carLog[3];
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
         carPool[i][0].tint = CAR_COLORS[carColorId];
-        carPool[i][0].width = length;
-        carPool[i][0].height = width;
+        carPool[i][0].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
+        carPool[i][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
         carContainer.addChild(carPool[i][0]);
 
         let laneChange = parseInt(carLog[4]) + 1;
         carPool[i][1].position.set(position[0], position[1]);
         carPool[i][1].rotation = carPool[i][0].rotation;
         carPool[i][1].texture = turnSignalTextures[laneChange];
-        carPool[i][1].width = length;
-        carPool[i][1].height = width;
+        carPool[i][1].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
+        carPool[i][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
         turnSignalContainer.addChild(carPool[i][1]);
     }
     nodeCarNum.innerText = carLogs.length-1;
@@ -779,3 +786,83 @@ let chart = {
     },
     ptr: 0
 };
+
+/*
+ * Settings Panel
+ */
+function hexToPixi(hex) {
+    return parseInt(hex.replace('#', ''), 16);
+}
+
+function pixiToHex(color) {
+    return '#' + color.toString(16).padStart(6, '0');
+}
+
+function initSettings() {
+    // --- Car Colors ---
+    CAR_COLORS.forEach(function(color, i) {
+        let picker = document.getElementById('car-color-' + i);
+        if (!picker) return;
+        picker.value = pixiToHex(color);
+        picker.addEventListener('input', function() {
+            CAR_COLORS[i] = hexToPixi(this.value);
+        });
+    });
+
+    // --- Car Size Override ---
+    let overrideCheckbox = document.getElementById('car-size-override');
+    let sizeControls     = document.getElementById('car-size-controls');
+    overrideCheckbox.addEventListener('change', function() {
+        CAR_SIZE_OVERRIDE = this.checked;
+        sizeControls.classList.toggle('d-none', !this.checked);
+    });
+    document.getElementById('car-length-input').addEventListener('input', function() {
+        CAR_LENGTH_CUSTOM = parseFloat(this.value) || 5;
+    });
+    document.getElementById('car-width-input').addEventListener('input', function() {
+        CAR_WIDTH_CUSTOM = parseFloat(this.value) || 2;
+    });
+
+    // --- Lane Width Scale ---
+    let laneScaleSlider = document.getElementById('lane-width-scale');
+    let laneScaleVal    = document.getElementById('lane-width-scale-val');
+    laneScaleSlider.addEventListener('input', function() {
+        LANE_WIDTH_SCALE = this.value / 100;
+        laneScaleVal.innerText = LANE_WIDTH_SCALE.toFixed(2);
+    });
+
+    // --- Background Color (instant) ---
+    document.getElementById('bg-color').addEventListener('input', function() {
+        BACKGROUND_COLOR = hexToPixi(this.value);
+        if (app) app.renderer.backgroundColor = BACKGROUND_COLOR;
+    });
+
+    // --- Road & Lane Colors (need redraw via Apply button) ---
+    document.getElementById('road-color').addEventListener('input', function() {
+        LANE_COLOR = hexToPixi(this.value);
+    });
+    document.getElementById('lane-inner-color').addEventListener('input', function() {
+        LANE_INNER_COLOR = hexToPixi(this.value);
+    });
+
+    // --- Apply Road Settings ---
+    document.getElementById('apply-road-settings').addEventListener('click', function() {
+        if (ready) {
+            drawRoadnet();
+            infoAppend("Road settings applied.");
+        } else {
+            infoAppend("Load a simulation first, then apply settings.");
+        }
+    });
+
+    // --- Settings Collapse Toggle ---
+    document.getElementById('settings-toggle').addEventListener('click', function() {
+        let content  = document.getElementById('settings-content');
+        let chevron  = document.getElementById('settings-chevron');
+        let hidden   = content.classList.toggle('d-none');
+        chevron.classList.toggle('fa-chevron-down', !hidden);
+        chevron.classList.toggle('fa-chevron-up',    hidden);
+    });
+}
+
+initSettings();
