@@ -384,6 +384,14 @@ function drawRoadnet() {
             drawNode(nodes[nodeId], nodeGraphics);
         }
     }
+    // Create traffic light texture ONCE — ParticleContainer requires all
+    // sprites to share the same base texture; creating one per edge caused
+    // road/light overlap rendering artifacts.
+    let lightGOnce = new Graphics();
+    lightGOnce.lineStyle(TRAFFIC_LIGHT_WIDTH, 0xFFFFFF);
+    lightGOnce.drawLine(new Point(0, 0), new Point(1, 0));
+    lightTexture = renderer.generateTexture(lightGOnce);
+
     for (edgeId in edges) {
         let edgeGraphics;
         if (debugMode) {
@@ -569,11 +577,6 @@ function drawEdge(edge, graphics) {
             pointBOffset = points[i-1].directTo(points[i+1]).rotate(ROTATE);
         }
         prevPointBOffset = pointBOffset;
-
-        lightG = new Graphics();
-        lightG.lineStyle(TRAFFIC_LIGHT_WIDTH, 0xFFFFFF);
-        lightG.drawLine(new Point(0, 0), new Point(1, 0));
-        lightTexture = renderer.generateTexture(lightG);
 
         // Draw Traffic Lights
         if (i == points.length-1 && !to.virtual) {
