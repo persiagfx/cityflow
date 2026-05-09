@@ -890,7 +890,11 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         let along = rx * seg.ddx + ry * seg.ddy;
         let perp  = rx * seg.px  + ry * seg.py;
 
-        let score = Math.abs(perp) / dot;   // lower = better lateral + angle fit
+        // Must be within segment bounds (with margin for road-end zone)
+        let margin = seg.len * 0.1 + 5;
+        if (along < -margin || along > seg.len + margin) continue;
+
+        let score = Math.abs(perp) / dot;
         if (score < bestScore) {
             bestScore = score;
             bestPerp  = perp;
@@ -899,12 +903,30 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         }
     }
 
-    if (!best) return [rawX, rawY];
+    if (best) {
+        return [
+            best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
+            best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
+        ];
+    }
 
-    return [
-        best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
-        best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
-    ];
+    // ── Intersection fallback: scale radially from nearest node centre ─────
+    // The node polygon is also scaled from node.point, so this stays aligned.
+    if (window.nodePositions && window.nodePositions.length > 0) {
+        let nearest = null, nearestD2 = Infinity;
+        for (let np of window.nodePositions) {
+            let d2 = (rawX - np.x) * (rawX - np.x) + (rawY - np.y) * (rawY - np.y);
+            if (d2 < nearestD2) { nearestD2 = d2; nearest = np; }
+        }
+        if (nearest) {
+            return [
+                nearest.x + (rawX - nearest.x) * LANE_WIDTH_SCALE,
+                nearest.y + (rawY - nearest.y) * LANE_WIDTH_SCALE
+            ];
+        }
+    }
+
+    return [rawX, rawY];
 }
 
 function initSettings() {
