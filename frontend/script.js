@@ -861,40 +861,48 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         return [rawX, rawY];
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
-    let best = null, bestPerp = 0, bestAlong = 0;
-    let bestPerpAbs = Infinity;
+
+    let best = null, bestPerp = 0, bestAlong = 0, bestPerpAbs = Infinity;
+    // Fallback for intersection cars: best angle-only match (no bounds check)
+    let fallback = null, fbPerp = 0, fbAlong = 0, fbPerpAbs = Infinity;
 
     for (let seg of window.roadSegIndex) {
         let dot = cosA * seg.ddx + sinA * seg.ddy;
-        // Direction must roughly match (within ~45°)
-        if (dot < 0.7) continue;
+        if (dot < 0.7) continue;   // direction must roughly match (~45°)
 
-        let rx = rawX - seg.p1x, ry = rawY - seg.p1y;
+        let rx    = rawX - seg.p1x, ry = rawY - seg.p1y;
         let along = rx * seg.ddx + ry * seg.ddy;
+        let perp  = rx * seg.px  + ry * seg.py;
+        let pa    = Math.abs(perp);
 
-        // Car must be within the segment length (with generous margin for road ends)
-        let margin = seg.len * 0.3 + 20;
-        if (along < -margin || along > seg.len + margin) continue;
+        // ── primary: car is within segment bounds ──────────────────────────
+        let margin = seg.len * 0.25 + 10;
+        if (along >= -margin && along <= seg.len + margin) {
+            if (pa < bestPerpAbs) {
+                bestPerpAbs = pa; bestPerp = perp; bestAlong = along; best = seg;
+            }
+        }
 
-        let perp    = rx * seg.px + ry * seg.py;
-        let perpAbs = Math.abs(perp);
-
-        if (perpAbs < bestPerpAbs) {
-            bestPerpAbs = perpAbs;
-            bestPerp    = perp;
-            bestAlong   = along;
-            best        = seg;
+        // ── fallback: extend segment line through intersection (no bounds) ─
+        if (pa < fbPerpAbs) {
+            fbPerpAbs = pa; fbPerp = perp; fbAlong = along; fallback = seg;
         }
     }
 
-    // If no segment found, or car is too far perpendicularly from any road
-    // (likely inside an intersection node), don't scale — return original position.
-    if (!best || bestPerpAbs > window.roadSegMaxWidth * 1.5)
+    // Use primary match if found; otherwise use angle-based fallback
+    // (covers cars travelling through intersection nodes).
+    let chosen    = best     || fallback;
+    let chPerp    = best     ? bestPerp  : fbPerp;
+    let chAlong   = best     ? bestAlong : fbAlong;
+    let chPerpAbs = best     ? bestPerpAbs : fbPerpAbs;
+
+    // If even the fallback perp distance is way too large, don't scale
+    if (!chosen || chPerpAbs > window.roadSegMaxWidth * 2)
         return [rawX, rawY];
 
     return [
-        best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
-        best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
+        chosen.p1x + chAlong * chosen.ddx + chPerp * LANE_WIDTH_SCALE * chosen.px,
+        chosen.p1y + chAlong * chosen.ddy + chPerp * LANE_WIDTH_SCALE * chosen.py
     ];
 }
 
