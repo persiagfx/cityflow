@@ -365,8 +365,13 @@ function drawRoadnet() {
     // Each entry stores the segment's unit direction and its left-hand
     // perpendicular (rotate 90° = [-ddy, ddx]) in screen coordinates.
     window.roadSegIndex = [];
+    window.roadSegMaxWidth = 0;
     for (let eid in edges) {
         let ed = edges[eid];
+        // Track max road width so scaledCarPos can reject intersection cars
+        let roadW = ed.laneWidths.reduce((a, b) => a + b, 0);
+        if (roadW > window.roadSegMaxWidth) window.roadSegMaxWidth = roadW;
+
         for (let i = 1; i < ed.points.length; i++) {
             let p1 = ed.points[i-1], p2 = ed.points[i];
             let dx = p2.x - p1.x, dy = p2.y - p1.y;
@@ -856,29 +861,36 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         return [rawX, rawY];
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
-    let best = null, bestScore = Infinity, bestPerp = 0, bestAlong = 0;
+    let best = null, bestPerp = 0, bestAlong = 0;
+    let bestPerpAbs = Infinity;
 
     for (let seg of window.roadSegIndex) {
         let dot = cosA * seg.ddx + sinA * seg.ddy;
-        // Skip segments going the opposite direction
-        if (dot < 0) continue;
+        // Direction must roughly match (within ~45°)
+        if (dot < 0.7) continue;
 
         let rx = rawX - seg.p1x, ry = rawY - seg.p1y;
         let along = rx * seg.ddx + ry * seg.ddy;
-        let perp  = rx * seg.px  + ry * seg.py;
 
-        // Combined score: favour close perpendicular distance AND good angle match.
-        // (1 - dot) ranges 0 (perfect) to 1 (90°); weight it less than perp distance.
-        let score = Math.abs(perp) + (1 - dot) * 50;
-        if (score < bestScore) {
-            bestScore = score;
-            bestPerp  = perp;
-            bestAlong = along;
-            best      = seg;
+        // Car must be within the segment length (with generous margin for road ends)
+        let margin = seg.len * 0.3 + 20;
+        if (along < -margin || along > seg.len + margin) continue;
+
+        let perp    = rx * seg.px + ry * seg.py;
+        let perpAbs = Math.abs(perp);
+
+        if (perpAbs < bestPerpAbs) {
+            bestPerpAbs = perpAbs;
+            bestPerp    = perp;
+            bestAlong   = along;
+            best        = seg;
         }
     }
 
-    if (!best) return [rawX, rawY];
+    // If no segment found, or car is too far perpendicularly from any road
+    // (likely inside an intersection node), don't scale — return original position.
+    if (!best || bestPerpAbs > window.roadSegMaxWidth * 1.5)
+        return [rawX, rawY];
 
     return [
         best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
