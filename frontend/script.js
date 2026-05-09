@@ -868,36 +868,35 @@ function scaledCarPos(rawX, rawY, pixiRot) {
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
 
-    // ── Step 1: try to match a road segment (car is on a straight road) ───
-    let best = null, bestPerp = 0, bestAlong = 0, bestPerpAbs = Infinity;
+    // Find the best-matching road segment with NO bounds limit so segment lines
+    // are extended through intersection nodes.  Score = |perp| / dot so that
+    // cars with a good angle match AND small lateral offset win; dot is capped
+    // at 0.1 to avoid division-by-zero on near-perpendicular segments.
+    let best = null, bestScore = Infinity, bestPerp = 0, bestAlong = 0;
+
     for (let seg of window.roadSegIndex) {
-        if (cosA * seg.ddx + sinA * seg.ddy < 0.7) continue;  // ~45° tolerance
+        let dot = cosA * seg.ddx + sinA * seg.ddy;
+        if (dot < 0.5) continue;            // skip opposite / perpendicular roads
 
         let rx    = rawX - seg.p1x, ry = rawY - seg.p1y;
         let along = rx * seg.ddx + ry * seg.ddy;
-        // Extend slightly into the intersection to reduce gap at road-end boundary
-        let margin = seg.len * 0.1 + 5;
-        if (along < -margin || along > seg.len + margin) continue;
+        let perp  = rx * seg.px  + ry * seg.py;
 
-        let perp = rx * seg.px + ry * seg.py;
-        let pa   = Math.abs(perp);
-        if (pa < bestPerpAbs) {
-            bestPerpAbs = pa; bestPerp = perp; bestAlong = along; best = seg;
+        let score = Math.abs(perp) / dot;   // lower = better lateral + angle fit
+        if (score < bestScore) {
+            bestScore = score;
+            bestPerp  = perp;
+            bestAlong = along;
+            best      = seg;
         }
     }
 
-    if (best) {
-        // Car is on a road: scale perpendicular distance from the reference line
-        return [
-            best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
-            best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
-        ];
-    }
+    if (!best) return [rawX, rawY];
 
-    // Car is inside an intersection node — no reliable reference line exists.
-    // Return the original position; the intersection box is already drawn scaled
-    // so the car stays within the visual intersection area.
-    return [rawX, rawY];
+    return [
+        best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
+        best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
+    ];
 }
 
 function initSettings() {
