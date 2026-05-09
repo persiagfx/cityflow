@@ -556,17 +556,26 @@ PIXI.Graphics.prototype.drawDashLine = function(pointA, pointB, dash = 16, gap =
 function drawNode(node, graphics) {
     graphics.beginFill(LANE_COLOR);
     let outline = node.outline;
-    for (let i = 0 ; i < outline.length ; i+=2) {
-        outline[i+1] = -outline[i+1];
+    // node.point is already in screen coords (transCoord applied in drawRoadnet)
+    let cx = node.point.x, cy = node.point.y;
+    let scaledOutline = [];
+
+    for (let i = 0; i < outline.length; i += 2) {
+        // Convert outline vertex to screen coords (y-flip) then scale from node centre
+        let ox = outline[i];
+        let oy = -outline[i + 1];
+        let sx = cx + (ox - cx) * LANE_WIDTH_SCALE;
+        let sy = cy + (oy - cy) * LANE_WIDTH_SCALE;
+        scaledOutline.push(sx, sy);
         if (i == 0)
-            graphics.moveTo(outline[i], outline[i+1]);
+            graphics.moveTo(sx, sy);
         else
-            graphics.lineTo(outline[i], outline[i+1]);
+            graphics.lineTo(sx, sy);
     }
     graphics.endFill();
 
     if (debugMode) {
-        graphics.hitArea = new PIXI.Polygon(outline);
+        graphics.hitArea = new PIXI.Polygon(scaledOutline);
         graphics.interactive = true;
         graphics.on("mouseover", function () {
             selectedDOM.innerText = node.id;
@@ -576,7 +585,6 @@ function drawNode(node, graphics) {
             graphics.alpha = 1;
         });
     }
-
 }
 
 function drawEdge(edge, graphics) {
