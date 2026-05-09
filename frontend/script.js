@@ -605,14 +605,14 @@ function drawEdge(edge, graphics) {
 
     for (let i = 1;i < points.length;++i) {
         if (i == 1){
-            pointA = points[0].moveAlongDirectTo(points[1], from.virtual ? 0 : from.width);
+            pointA = points[0].moveAlongDirectTo(points[1], from.virtual ? 0 : from.width * LANE_WIDTH_SCALE);
             pointAOffset = points[0].directTo(points[1]).rotate(ROTATE);
         } else {
             pointA = points[i-1];
             pointAOffset = prevPointBOffset;
         }
         if (i == points.length - 1) {
-            pointB = points[i].moveAlongDirectTo(points[i-1], to.virtual ? 0 : to.width);
+            pointB = points[i].moveAlongDirectTo(points[i-1], to.virtual ? 0 : to.width * LANE_WIDTH_SCALE);
             pointBOffset = points[i-1].directTo(points[i]).rotate(ROTATE);
         } else {
             pointB = points[i];
