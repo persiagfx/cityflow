@@ -894,6 +894,9 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         let margin = seg.len * 0.1 + 5;
         if (along < -margin || along > seg.len + margin) continue;
 
+        // Reject if car is too far perpendicularly — likely a parallel road
+        if (Math.abs(perp) > window.roadSegMaxWidth * 1.5) continue;
+
         let score = Math.abs(perp) / dot;
         if (score < bestScore) {
             bestScore = score;
