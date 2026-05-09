@@ -924,12 +924,20 @@ function initSettings() {
         densityVal.innerText = this.value;
     });
 
-    // --- Lane Divider Width ---
+    // --- Lane Divider Width (thickness) ---
     let dividerSlider = document.getElementById('lane-divider-width');
     let dividerVal    = document.getElementById('lane-divider-width-val');
     dividerSlider.addEventListener('input', function() {
         LANE_BORDER_WIDTH = parseInt(this.value);
         dividerVal.innerText = this.value;
+    });
+
+    // --- Lane Dash Length ---
+    let dashSlider = document.getElementById('lane-dash-length');
+    let dashVal    = document.getElementById('lane-dash-length-val');
+    dashSlider.addEventListener('input', function() {
+        LANE_DASH = parseInt(this.value);
+        dashVal.innerText = this.value;
     });
 
     // --- Background Color (instant) ---
