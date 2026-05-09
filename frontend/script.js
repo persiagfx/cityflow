@@ -856,21 +856,22 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         return [rawX, rawY];
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
-    let best = null, bestDist = Infinity, bestPerp = 0, bestAlong = 0;
+    let best = null, bestScore = Infinity, bestPerp = 0, bestAlong = 0;
 
     for (let seg of window.roadSegIndex) {
-        // Direction must roughly match (dot > 0.85 ≈ within ±32°)
-        if (cosA * seg.ddx + sinA * seg.ddy < 0.85) continue;
+        let dot = cosA * seg.ddx + sinA * seg.ddy;
+        // Skip segments going the opposite direction
+        if (dot < 0) continue;
 
         let rx = rawX - seg.p1x, ry = rawY - seg.p1y;
         let along = rx * seg.ddx + ry * seg.ddy;
-        // Allow small margin beyond segment ends for smooth transitions
-        if (along < -10 || along > seg.len + 10) continue;
+        let perp  = rx * seg.px  + ry * seg.py;
 
-        let perp  = rx * seg.px + ry * seg.py;
-        let dist  = Math.abs(perp);
-        if (dist < bestDist) {
-            bestDist  = dist;
+        // Combined score: favour close perpendicular distance AND good angle match.
+        // (1 - dot) ranges 0 (perfect) to 1 (90°); weight it less than perp distance.
+        let score = Math.abs(perp) + (1 - dot) * 50;
+        if (score < bestScore) {
+            bestScore = score;
             bestPerp  = perp;
             bestAlong = along;
             best      = seg;
