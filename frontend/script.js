@@ -30,6 +30,7 @@ var LANE_WIDTH_SCALE  = 1.0;
 var CAR_SIZE_OVERRIDE = false;
 var CAR_LENGTH_CUSTOM = 5;
 var CAR_WIDTH_CUSTOM  = 2;
+var VEHICLE_DENSITY   = 1.0;   // 0.1 – 1.0  (fraction of vehicles to display)
 
 NUM_CAR_POOL = 150000;
 
@@ -357,6 +358,27 @@ function drawRoadnet() {
             edge.points[j] = new Point(transCoord(edge.points[j]));
         }
         edges[edge.id] = edge;
+    }
+
+    // Build road-segment spatial index used by scaledCarPos().
+    // Each entry stores the segment's unit direction and its left-hand
+    // perpendicular (rotate 90° = [-ddy, ddx]) in screen coordinates.
+    window.roadSegIndex = [];
+    for (let eid in edges) {
+        let ed = edges[eid];
+        for (let i = 1; i < ed.points.length; i++) {
+            let p1 = ed.points[i-1], p2 = ed.points[i];
+            let dx = p2.x - p1.x, dy = p2.y - p1.y;
+            let len = Math.sqrt(dx*dx + dy*dy);
+            if (len < 0.001) continue;
+            dx /= len; dy /= len;
+            window.roadSegIndex.push({
+                p1x: p1.x, p1y: p1.y,
+                ddx: dx,   ddy: dy,
+                px: -dy,   py:  dx,   // left-hand perpendicular (= rotate 90°)
+                len
+            });
+        }
     }
 
     /**
@@ -716,29 +738,44 @@ function drawStep(step) {
     carContainer.removeChildren();
     turnSignalContainer.removeChildren();
     let carLog, position, length, width;
+    let poolIdx = 0;   // separate pool pointer so density-skipped slots are reused
     for (let i = 0, len = carLogs.length - 1;i < len;++i) {
         carLog = carLogs[i].split(' ');
+
+        // ── Vehicle Density filter ──────────────────────────────────────────
+        // Use a deterministic hash of the vehicle ID so the same vehicles are
+        // always shown/hidden regardless of the current step.
+        if (VEHICLE_DENSITY < 1.0 &&
+            (stringHash(carLog[3]) % 1000) / 1000 >= VEHICLE_DENSITY) continue;
+
         position = transCoord([parseFloat(carLog[0]), parseFloat(carLog[1])]);
         length = parseFloat(carLog[5]);
-        width = parseFloat(carLog[6]);
-        carPool[i][0].position.set(position[0], position[1]);
-        carPool[i][0].rotation = 2*Math.PI - parseFloat(carLog[2]);
-        carPool[i][0].name = carLog[3];
+        width  = parseFloat(carLog[6]);
+
+        // ── Lane-width scale: shift car perpendicular to road ───────────────
+        let pixiRot = 2*Math.PI - parseFloat(carLog[2]);
+        let scaledPos = scaledCarPos(position[0], position[1], pixiRot);
+
+        carPool[poolIdx][0].position.set(scaledPos[0], scaledPos[1]);
+        carPool[poolIdx][0].rotation = pixiRot;
+        carPool[poolIdx][0].name = carLog[3];
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
-        carPool[i][0].tint = CAR_COLORS[carColorId];
-        carPool[i][0].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[i][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
-        carContainer.addChild(carPool[i][0]);
+        carPool[poolIdx][0].tint = CAR_COLORS[carColorId];
+        carPool[poolIdx][0].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
+        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
+        carContainer.addChild(carPool[poolIdx][0]);
 
         let laneChange = parseInt(carLog[4]) + 1;
-        carPool[i][1].position.set(position[0], position[1]);
-        carPool[i][1].rotation = carPool[i][0].rotation;
-        carPool[i][1].texture = turnSignalTextures[laneChange];
-        carPool[i][1].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[i][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
-        turnSignalContainer.addChild(carPool[i][1]);
+        carPool[poolIdx][1].position.set(scaledPos[0], scaledPos[1]);
+        carPool[poolIdx][1].rotation = pixiRot;
+        carPool[poolIdx][1].texture = turnSignalTextures[laneChange];
+        carPool[poolIdx][1].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
+        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
+        turnSignalContainer.addChild(carPool[poolIdx][1]);
+
+        poolIdx++;
     }
-    nodeCarNum.innerText = carLogs.length-1;
+    nodeCarNum.innerText = poolIdx;   // show only rendered (post-filter) count
     nodeTotalStep.innerText = totalStep;
     nodeCurrentStep.innerText = cnt+1;
     nodeProgressPercentage.innerText = (cnt / totalStep * 100).toFixed(2) + "%";
@@ -801,6 +838,51 @@ function pixiToHex(color) {
     return '#' + color.toString(16).padStart(6, '0');
 }
 
+/**
+ * Scale a car's perpendicular distance from its road reference line by
+ * LANE_WIDTH_SCALE, so that cars stay inside their lanes when lane width
+ * changes.  Uses the pre-built roadSegIndex to find the nearest matching
+ * road segment (matched by direction angle).
+ *
+ * @param {number} rawX  - car X in screen coords (after transCoord)
+ * @param {number} rawY  - car Y in screen coords
+ * @param {number} pixiRot - car rotation in PixiJS radians (2π − simAngle)
+ * @returns {[number, number]} scaled [x, y]
+ */
+function scaledCarPos(rawX, rawY, pixiRot) {
+    if (LANE_WIDTH_SCALE === 1.0 || !window.roadSegIndex || window.roadSegIndex.length === 0)
+        return [rawX, rawY];
+
+    let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
+    let best = null, bestDist = Infinity, bestPerp = 0, bestAlong = 0;
+
+    for (let seg of window.roadSegIndex) {
+        // Direction must roughly match (dot > 0.85 ≈ within ±32°)
+        if (cosA * seg.ddx + sinA * seg.ddy < 0.85) continue;
+
+        let rx = rawX - seg.p1x, ry = rawY - seg.p1y;
+        let along = rx * seg.ddx + ry * seg.ddy;
+        // Allow small margin beyond segment ends for smooth transitions
+        if (along < -10 || along > seg.len + 10) continue;
+
+        let perp  = rx * seg.px + ry * seg.py;
+        let dist  = Math.abs(perp);
+        if (dist < bestDist) {
+            bestDist  = dist;
+            bestPerp  = perp;
+            bestAlong = along;
+            best      = seg;
+        }
+    }
+
+    if (!best) return [rawX, rawY];
+
+    return [
+        best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
+        best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
+    ];
+}
+
 function initSettings() {
     // --- Car Colors ---
     CAR_COLORS.forEach(function(color, i) {
@@ -832,6 +914,14 @@ function initSettings() {
     laneScaleSlider.addEventListener('input', function() {
         LANE_WIDTH_SCALE = this.value / 100;
         laneScaleVal.innerText = LANE_WIDTH_SCALE.toFixed(2);
+    });
+
+    // --- Vehicle Density ---
+    let densitySlider = document.getElementById('vehicle-density');
+    let densityVal    = document.getElementById('vehicle-density-val');
+    densitySlider.addEventListener('input', function() {
+        VEHICLE_DENSITY = this.value / 100;
+        densityVal.innerText = this.value;
     });
 
     // --- Background Color (instant) ---
