@@ -368,7 +368,6 @@ function drawRoadnet() {
     window.roadSegMaxWidth = 0;
     for (let eid in edges) {
         let ed = edges[eid];
-        // Track max road width so scaledCarPos can reject intersection cars
         let roadW = ed.laneWidths.reduce((a, b) => a + b, 0);
         if (roadW > window.roadSegMaxWidth) window.roadSegMaxWidth = roadW;
 
@@ -381,10 +380,17 @@ function drawRoadnet() {
             window.roadSegIndex.push({
                 p1x: p1.x, p1y: p1.y,
                 ddx: dx,   ddy: dy,
-                px: -dy,   py:  dx,   // left-hand perpendicular (= rotate 90°)
+                px: -dy,   py:  dx,
                 len
             });
         }
+    }
+
+    // Store non-virtual node positions for intersection car scaling
+    window.nodePositions = [];
+    for (let nid in nodes) {
+        let nd = nodes[nid];
+        window.nodePositions.push({ x: nd.point.x, y: nd.point.y });
     }
 
     /**
@@ -862,48 +868,48 @@ function scaledCarPos(rawX, rawY, pixiRot) {
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
 
+    // ── Step 1: try to match a road segment (car is on a straight road) ───
     let best = null, bestPerp = 0, bestAlong = 0, bestPerpAbs = Infinity;
-    // Fallback for intersection cars: best angle-only match (no bounds check)
-    let fallback = null, fbPerp = 0, fbAlong = 0, fbPerpAbs = Infinity;
-
     for (let seg of window.roadSegIndex) {
-        let dot = cosA * seg.ddx + sinA * seg.ddy;
-        if (dot < 0.7) continue;   // direction must roughly match (~45°)
+        if (cosA * seg.ddx + sinA * seg.ddy < 0.7) continue;  // ~45° tolerance
 
         let rx    = rawX - seg.p1x, ry = rawY - seg.p1y;
         let along = rx * seg.ddx + ry * seg.ddy;
-        let perp  = rx * seg.px  + ry * seg.py;
-        let pa    = Math.abs(perp);
-
-        // ── primary: car is within segment bounds ──────────────────────────
         let margin = seg.len * 0.25 + 10;
-        if (along >= -margin && along <= seg.len + margin) {
-            if (pa < bestPerpAbs) {
-                bestPerpAbs = pa; bestPerp = perp; bestAlong = along; best = seg;
-            }
-        }
+        if (along < -margin || along > seg.len + margin) continue;
 
-        // ── fallback: extend segment line through intersection (no bounds) ─
-        if (pa < fbPerpAbs) {
-            fbPerpAbs = pa; fbPerp = perp; fbAlong = along; fallback = seg;
+        let perp = rx * seg.px + ry * seg.py;
+        let pa   = Math.abs(perp);
+        if (pa < bestPerpAbs) {
+            bestPerpAbs = pa; bestPerp = perp; bestAlong = along; best = seg;
         }
     }
 
-    // Use primary match if found; otherwise use angle-based fallback
-    // (covers cars travelling through intersection nodes).
-    let chosen    = best     || fallback;
-    let chPerp    = best     ? bestPerp  : fbPerp;
-    let chAlong   = best     ? bestAlong : fbAlong;
-    let chPerpAbs = best     ? bestPerpAbs : fbPerpAbs;
+    if (best) {
+        // Scale perpendicular distance from the road reference line
+        return [
+            best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
+            best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
+        ];
+    }
 
-    // If even the fallback perp distance is way too large, don't scale
-    if (!chosen || chPerpAbs > window.roadSegMaxWidth * 2)
-        return [rawX, rawY];
+    // ── Step 2: car is inside an intersection node ─────────────────────────
+    // Scale its position radially from the nearest node centre.
+    if (window.nodePositions && window.nodePositions.length > 0) {
+        let nearest = null, nearestD2 = Infinity;
+        for (let np of window.nodePositions) {
+            let d2 = (rawX - np.x) * (rawX - np.x) + (rawY - np.y) * (rawY - np.y);
+            if (d2 < nearestD2) { nearestD2 = d2; nearest = np; }
+        }
+        if (nearest) {
+            return [
+                nearest.x + (rawX - nearest.x) * LANE_WIDTH_SCALE,
+                nearest.y + (rawY - nearest.y) * LANE_WIDTH_SCALE
+            ];
+        }
+    }
 
-    return [
-        chosen.p1x + chAlong * chosen.ddx + chPerp * LANE_WIDTH_SCALE * chosen.px,
-        chosen.p1y + chAlong * chosen.ddy + chPerp * LANE_WIDTH_SCALE * chosen.py
-    ];
+    return [rawX, rawY];
 }
 
 function initSettings() {
