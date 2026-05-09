@@ -924,6 +924,14 @@ function initSettings() {
         densityVal.innerText = this.value;
     });
 
+    // --- Lane Divider Width ---
+    let dividerSlider = document.getElementById('lane-divider-width');
+    let dividerVal    = document.getElementById('lane-divider-width-val');
+    dividerSlider.addEventListener('input', function() {
+        LANE_BORDER_WIDTH = parseInt(this.value);
+        dividerVal.innerText = this.value;
+    });
+
     // --- Background Color (instant) ---
     document.getElementById('bg-color').addEventListener('input', function() {
         BACKGROUND_COLOR = hexToPixi(this.value);
