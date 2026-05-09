@@ -875,7 +875,8 @@ function scaledCarPos(rawX, rawY, pixiRot) {
 
         let rx    = rawX - seg.p1x, ry = rawY - seg.p1y;
         let along = rx * seg.ddx + ry * seg.ddy;
-        let margin = seg.len * 0.25 + 10;
+        // Extend slightly into the intersection to reduce gap at road-end boundary
+        let margin = seg.len * 0.1 + 5;
         if (along < -margin || along > seg.len + margin) continue;
 
         let perp = rx * seg.px + ry * seg.py;
@@ -886,29 +887,16 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     }
 
     if (best) {
-        // Scale perpendicular distance from the road reference line
+        // Car is on a road: scale perpendicular distance from the reference line
         return [
             best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
             best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
         ];
     }
 
-    // ── Step 2: car is inside an intersection node ─────────────────────────
-    // Scale its position radially from the nearest node centre.
-    if (window.nodePositions && window.nodePositions.length > 0) {
-        let nearest = null, nearestD2 = Infinity;
-        for (let np of window.nodePositions) {
-            let d2 = (rawX - np.x) * (rawX - np.x) + (rawY - np.y) * (rawY - np.y);
-            if (d2 < nearestD2) { nearestD2 = d2; nearest = np; }
-        }
-        if (nearest) {
-            return [
-                nearest.x + (rawX - nearest.x) * LANE_WIDTH_SCALE,
-                nearest.y + (rawY - nearest.y) * LANE_WIDTH_SCALE
-            ];
-        }
-    }
-
+    // Car is inside an intersection node — no reliable reference line exists.
+    // Return the original position; the intersection box is already drawn scaled
+    // so the car stays within the visual intersection area.
     return [rawX, rawY];
 }
 
