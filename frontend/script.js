@@ -31,6 +31,7 @@ var CAR_SIZE_OVERRIDE = false;
 var CAR_LENGTH_CUSTOM = 5;
 var CAR_WIDTH_CUSTOM  = 2;
 var VEHICLE_DENSITY   = 1.0;   // 0.1 – 1.0  (fraction of vehicles to display)
+var LANE_DIVIDER_INSET = 0;    // perpendicular offset of divider line from lane boundary
 
 NUM_CAR_POOL = 150000;
 
@@ -639,7 +640,8 @@ function drawEdge(edge, graphics) {
         for (let lane = 0, len = edge.nLane-1;lane < len;++lane) {
             offset += scaledLaneWidths[lane];
             graphics.lineStyle(LANE_BORDER_WIDTH, LANE_INNER_COLOR);
-            graphics.drawDashLine(pointA.moveAlong(pointAOffset, offset), pointB.moveAlong(pointBOffset, offset), LANE_DASH, LANE_GAP);
+            let divOffset = offset + LANE_DIVIDER_INSET;
+            graphics.drawDashLine(pointA.moveAlong(pointAOffset, divOffset), pointB.moveAlong(pointBOffset, divOffset), LANE_DASH, LANE_GAP);
         }
 
         offset += scaledLaneWidths[edge.nLane-1];
@@ -946,6 +948,14 @@ function initSettings() {
     gapSlider.addEventListener('input', function() {
         LANE_GAP = parseInt(this.value);
         gapVal.innerText = this.value;
+    });
+
+    // --- Lane Divider Side Offset ---
+    let insetSlider = document.getElementById('lane-divider-inset');
+    let insetVal    = document.getElementById('lane-divider-inset-val');
+    insetSlider.addEventListener('input', function() {
+        LANE_DIVIDER_INSET = parseInt(this.value);
+        insetVal.innerText = this.value;
     });
 
     // --- Background Color (instant) ---
