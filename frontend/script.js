@@ -940,6 +940,14 @@ function initSettings() {
         dashVal.innerText = this.value;
     });
 
+    // --- Lane Dash Gap ---
+    let gapSlider = document.getElementById('lane-dash-gap');
+    let gapVal    = document.getElementById('lane-dash-gap-val');
+    gapSlider.addEventListener('input', function() {
+        LANE_GAP = parseInt(this.value);
+        gapVal.innerText = this.value;
+    });
+
     // --- Background Color (instant) ---
     document.getElementById('bg-color').addEventListener('input', function() {
         BACKGROUND_COLOR = hexToPixi(this.value);
