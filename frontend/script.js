@@ -783,7 +783,7 @@ function drawStep(step) {
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
         carPool[poolIdx][0].tint = CAR_COLORS[carColorId];
         carPool[poolIdx][0].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
+        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width * LANE_WIDTH_SCALE;
         carContainer.addChild(carPool[poolIdx][0]);
 
         let laneChange = parseInt(carLog[4]) + 1;
@@ -791,7 +791,7 @@ function drawStep(step) {
         carPool[poolIdx][1].rotation = pixiRot;
         carPool[poolIdx][1].texture = turnSignalTextures[laneChange];
         carPool[poolIdx][1].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
+        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width * LANE_WIDTH_SCALE;
         turnSignalContainer.addChild(carPool[poolIdx][1]);
 
         poolIdx++;
