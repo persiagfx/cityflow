@@ -370,8 +370,11 @@ function drawRoadnet() {
         let ed = edges[eid];
         let roadW = ed.laneWidths.reduce((a, b) => a + b, 0);
         if (roadW > window.roadSegMaxWidth) window.roadSegMaxWidth = roadW;
+        let fromInset = ed.from.virtual ? 0 : ed.from.width;
+        let toInset   = ed.to.virtual   ? 0 : ed.to.width;
+        let npts = ed.points.length;
 
-        for (let i = 1; i < ed.points.length; i++) {
+        for (let i = 1; i < npts; i++) {
             let p1 = ed.points[i-1], p2 = ed.points[i];
             let dx = p2.x - p1.x, dy = p2.y - p1.y;
             let len = Math.sqrt(dx*dx + dy*dy);
@@ -381,7 +384,9 @@ function drawRoadnet() {
                 p1x: p1.x, p1y: p1.y,
                 ddx: dx,   ddy: dy,
                 px: -dy,   py:  dx,
-                len
+                len,
+                fi: (i === 1)      ? fromInset : 0,
+                ti: (i === npts-1) ? toInset   : 0
             });
         }
     }
@@ -907,9 +912,15 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     }
 
     if (best) {
+        // Scale perp to keep car in its (now wider) lane.
+        // Also scale along so cars back away from the growing intersection insets:
+        //   at the from-node end (t=0) shift +fi*(S-1), at to-node end (t=1) shift -ti*(S-1).
+        let S = LANE_WIDTH_SCALE;
+        let t = best.len > 0 ? bestAlong / best.len : 0;
+        let scaledAlong = bestAlong + (S - 1) * (best.fi * (1 - t) - best.ti * t);
         return [
-            best.p1x + bestAlong * best.ddx + bestPerp * LANE_WIDTH_SCALE * best.px,
-            best.p1y + bestAlong * best.ddy + bestPerp * LANE_WIDTH_SCALE * best.py
+            best.p1x + scaledAlong * best.ddx + bestPerp * S * best.px,
+            best.p1y + scaledAlong * best.ddy + bestPerp * S * best.py
         ];
     }
 
