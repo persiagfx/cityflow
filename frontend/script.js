@@ -784,6 +784,7 @@ function drawStep(step) {
         // ── Lane-width scale: shift car perpendicular to road ───────────────
         let pixiRot = 2*Math.PI - parseFloat(carLog[2]);
         let scaledPos = scaledCarPos(position[0], position[1], pixiRot);
+        if (!scaledPos) continue;   // car is inside intersection — skip drawing
 
         carPool[poolIdx][0].position.set(scaledPos[0], scaledPos[1]);
         carPool[poolIdx][0].rotation = pixiRot;
@@ -898,12 +899,12 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         let along = rx * seg.ddx + ry * seg.ddy;
         let perp  = rx * seg.px  + ry * seg.py;
 
-        // Must be within segment bounds (with margin for road-end zone)
-        let margin = seg.len * 0.1 + 5;
+        // Allow cars well past the segment end (inside intersection) to still match
+        let margin = seg.len + window.roadSegMaxWidth * 2;
         if (along < -margin || along > seg.len + margin) continue;
 
         // Reject if car is too far perpendicularly — likely a parallel road
-        if (Math.abs(perp) > window.roadSegMaxWidth * 1.5) continue;
+        if (Math.abs(perp) > window.roadSegMaxWidth * 2) continue;
 
         let score = Math.abs(perp) / dot;
         if (score < bestScore) {
@@ -916,30 +917,18 @@ function scaledCarPos(rawX, rawY, pixiRot) {
 
     if (best) {
         let S = LANE_WIDTH_SCALE;
-        let t = best.len > 0 ? bestAlong / best.len : 0;
-        let scaledAlong = bestAlong + (S - 1) * (best.fi * (1 - t) - best.ti * t);
+        // Clamp along to segment bounds so intersection cars snap to road boundary
+        let clampedAlong = Math.max(0, Math.min(best.len, bestAlong));
+        let t = best.len > 0 ? clampedAlong / best.len : 0;
+        let scaledAlong = clampedAlong + (S - 1) * (best.fi * (1 - t) - best.ti * t);
         return [
             best.p1x + scaledAlong * best.ddx + bestPerp * S * best.px,
             best.p1y + scaledAlong * best.ddy + bestPerp * S * best.py
         ];
     }
 
-    // Intersection cars: scale radially from nearest node centre so they
-    // spread proportionally inside the larger scaled intersection polygon.
-    if (window.nodePositions && window.nodePositions.length > 0) {
-        let nearest = null, nearestD2 = Infinity;
-        for (let np of window.nodePositions) {
-            let d2 = (rawX - np.x) * (rawX - np.x) + (rawY - np.y) * (rawY - np.y);
-            if (d2 < nearestD2) { nearestD2 = d2; nearest = np; }
-        }
-        if (nearest) {
-            return [
-                nearest.x + (rawX - nearest.x) * LANE_WIDTH_SCALE,
-                nearest.y + (rawY - nearest.y) * LANE_WIDTH_SCALE
-            ];
-        }
-    }
-    return [rawX, rawY];
+    // No matching segment at all: hide the car (return null → caller skips drawing)
+    return null;
 }
 
 function initSettings() {
