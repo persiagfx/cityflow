@@ -394,11 +394,28 @@ function drawRoadnet() {
         }
     }
 
-    // Store non-virtual node positions for intersection car scaling
-    window.nodePositions = [];
+    // Inside real intersections, lateral lane scaling picks wrong segments and
+    // stacks cars; keep simulation coords there (still scales car sprite width).
+    window.intersectionSkipZones = [];
     for (let nid in nodes) {
         let nd = nodes[nid];
-        window.nodePositions.push({ x: nd.point.x, y: nd.point.y });
+        if (nd.virtual) continue;
+        let cx = nd.point.x, cy = nd.point.y;
+        let maxExt = 0;
+        if (!nd.outline || nd.outline.length < 4) {
+            let fb = (nd.width != null ? nd.width : 40) * LANE_WIDTH_SCALE * 0.45;
+            window.intersectionSkipZones.push({ cx, cy, r2: fb * fb });
+            continue;
+        }
+        for (let i = 0; i < nd.outline.length; i += 2) {
+            let vx = nd.outline[i], vy = -nd.outline[i + 1];
+            let sx = cx + (vx - cx) * LANE_WIDTH_SCALE;
+            let sy = cy + (vy - cy) * LANE_WIDTH_SCALE;
+            let d = Math.hypot(sx - cx, sy - cy);
+            if (d > maxExt) maxExt = d;
+        }
+        let r = maxExt * 0.30 + 6;
+        window.intersectionSkipZones.push({ cx, cy, r2: r * r });
     }
 
     /**
@@ -881,6 +898,14 @@ function pixiToHex(color) {
 function scaledCarPos(rawX, rawY, pixiRot) {
     if (LANE_WIDTH_SCALE === 1.0 || !window.roadSegIndex || window.roadSegIndex.length === 0)
         return [rawX, rawY];
+
+    if (window.intersectionSkipZones && window.intersectionSkipZones.length) {
+        for (let z of window.intersectionSkipZones) {
+            let dx = rawX - z.cx, dy = rawY - z.cy;
+            if (dx * dx + dy * dy <= z.r2)
+                return [rawX, rawY];
+        }
+    }
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
     let best = null, bestScore = Infinity, bestPerp = 0;
