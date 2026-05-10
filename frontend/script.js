@@ -918,10 +918,6 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         let S = LANE_WIDTH_SCALE;
         let t = best.len > 0 ? bestAlong / best.len : 0;
         let scaledAlong = bestAlong + (S - 1) * (best.fi * (1 - t) - best.ti * t);
-        // Hard-clamp: ensure car never falls inside the scaled intersection inset zone
-        let minA = best.fi * S;
-        let maxA = best.len - best.ti * S;
-        if (maxA > minA) scaledAlong = Math.max(minA, Math.min(maxA, scaledAlong));
         return [
             best.p1x + scaledAlong * best.ddx + bestPerp * S * best.px,
             best.p1y + scaledAlong * best.ddy + bestPerp * S * best.py
@@ -978,7 +974,6 @@ function initSettings() {
     laneScaleSlider.addEventListener('input', function() {
         LANE_WIDTH_SCALE = this.value / 100;
         laneScaleVal.innerText = LANE_WIDTH_SCALE.toFixed(2);
-        updateReplaySpeed(baseReplaySpeed / LANE_WIDTH_SCALE, true);
         if (ready) drawRoadnet();
     });
 
