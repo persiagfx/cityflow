@@ -394,32 +394,36 @@ function drawRoadnet() {
         }
     }
 
-    // Skip lateral lane scaling near intersection geometry (wrong segment → pile-up).
+    // Intersections: drawNode scales outline from centre by LANE_WIDTH_SCALE; cars must use the
+    // same radial mapping inside the junction (sim-outline coords), not raw sim XY alone.
     window.intersectionSkipPolygons = [];
     window.intersectionSkipCircles = [];
-    let laneSkipPad = Math.min(
+    let laneSkipPadPx = Math.min(
         56,
         Math.max(10, window.roadSegMaxWidth * LANE_WIDTH_SCALE * 0.30)
     );
+    let padSim = laneSkipPadPx / Math.max(LANE_WIDTH_SCALE, 1e-6);
     for (let nid in nodes) {
         let nd = nodes[nid];
         if (nd.virtual) continue;
         let cx = nd.point.x, cy = nd.point.y;
         if (nd.outline && nd.outline.length >= 6) {
-            let verts = [];
+            let vertsSim = [];
             for (let i = 0; i < nd.outline.length; i += 2) {
                 let vx = nd.outline[i], vy = -nd.outline[i + 1];
-                verts.push({
-                    x: cx + (vx - cx) * LANE_WIDTH_SCALE,
-                    y: cy + (vy - cy) * LANE_WIDTH_SCALE
-                });
+                vertsSim.push({ x: vx, y: vy });
             }
-            window.intersectionSkipPolygons.push({ verts, pad: laneSkipPad });
+            window.intersectionSkipPolygons.push({
+                verts: vertsSim,
+                pad: padSim,
+                cx,
+                cy
+            });
             continue;
         }
-        let ext = (nd.width != null ? nd.width : 42) * LANE_WIDTH_SCALE;
-        let r = ext * 1.05 + laneSkipPad;
-        window.intersectionSkipCircles.push({ cx, cy, r2: r * r });
+        let ext = (nd.width != null ? nd.width : 42);
+        let rSim = ext * 0.65 + padSim;
+        window.intersectionSkipCircles.push({ cx, cy, r2: rSim * rSim });
     }
 
     /**
@@ -909,26 +913,37 @@ function distPointToSeg2(px, py, ax, ay, bx, by) {
     return Math.hypot(px - ax - t * dx, py - ay - t * dy);
 }
 
-function carInsideIntersectionSkip(rawX, rawY) {
+/**
+ * If the car is in junction space (same coords as unscaled outline), map it like drawNode:
+ *   P' = C + (P - C) * LANE_WIDTH_SCALE
+ * Returns null when outside all junction zones (caller applies lane segment logic).
+ */
+function radialIntersectionCarPos(rawX, rawY) {
+    let S = LANE_WIDTH_SCALE;
     if (window.intersectionSkipPolygons && window.intersectionSkipPolygons.length) {
         for (let poly of window.intersectionSkipPolygons) {
-            let verts = poly.verts, pad = poly.pad;
-            if (pointInPolygon2(rawX, rawY, verts)) return true;
+            let verts = poly.verts, pad = poly.pad, cx = poly.cx, cy = poly.cy;
+            if (pointInPolygon2(rawX, rawY, verts)) {
+                return [cx + (rawX - cx) * S, cy + (rawY - cy) * S];
+            }
             let n = verts.length;
             for (let i = 0; i < n; i++) {
                 let a = verts[i], b = verts[(i + 1) % n];
-                if (distPointToSeg2(rawX, rawY, a.x, a.y, b.x, b.y) <= pad)
-                    return true;
+                if (distPointToSeg2(rawX, rawY, a.x, a.y, b.x, b.y) <= pad) {
+                    return [cx + (rawX - cx) * S, cy + (rawY - cy) * S];
+                }
             }
         }
     }
     if (window.intersectionSkipCircles && window.intersectionSkipCircles.length) {
         for (let z of window.intersectionSkipCircles) {
             let dx = rawX - z.cx, dy = rawY - z.cy;
-            if (dx * dx + dy * dy <= z.r2) return true;
+            if (dx * dx + dy * dy <= z.r2) {
+                return [z.cx + dx * S, z.cy + dy * S];
+            }
         }
     }
-    return false;
+    return null;
 }
 
 /**
@@ -946,8 +961,8 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     if (LANE_WIDTH_SCALE === 1.0 || !window.roadSegIndex || window.roadSegIndex.length === 0)
         return [rawX, rawY];
 
-    if (carInsideIntersectionSkip(rawX, rawY))
-        return [rawX, rawY];
+    let junctionPos = radialIntersectionCarPos(rawX, rawY);
+    if (junctionPos) return junctionPos;
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
     let best = null, bestScore = Infinity, bestPerp = 0;
