@@ -883,39 +883,33 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         return [rawX, rawY];
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
-    let best = null, bestScore = Infinity, bestPerp = 0, bestAlong = 0;
+    let best = null, bestScore = Infinity, bestPerp = 0;
 
     for (let seg of window.roadSegIndex) {
+        // Only consider segments whose direction matches the car's heading
         let dot = cosA * seg.ddx + sinA * seg.ddy;
         if (dot < 0.5) continue;
 
-        let rx    = rawX - seg.p1x, ry = rawY - seg.p1y;
-        let along = rx * seg.ddx + ry * seg.ddy;
-        let perp  = rx * seg.px  + ry * seg.py;
+        // Perpendicular distance from this segment's centreline
+        let rx   = rawX - seg.p1x, ry = rawY - seg.p1y;
+        let perp = rx * seg.px + ry * seg.py;
 
-        let margin = seg.len * 0.15 + 8;
-        if (along < -margin || along > seg.len + margin) continue;
+        // Reject segments that are clearly the wrong road (too far sideways)
         if (Math.abs(perp) > window.roadSegMaxWidth * 1.5) continue;
 
+        // Lower score = better match (small lateral offset + good angle alignment)
         let score = Math.abs(perp) / dot;
-        if (score < bestScore) {
-            bestScore = score;
-            bestPerp  = perp;
-            bestAlong = along;
-            best      = seg;
-        }
+        if (score < bestScore) { bestScore = score; bestPerp = perp; best = seg; }
     }
 
-    if (best) {
-        let S = LANE_WIDTH_SCALE;
-        return [
-            best.p1x + bestAlong * best.ddx + bestPerp * S * best.px,
-            best.p1y + bestAlong * best.ddy + bestPerp * S * best.py
-        ];
-    }
+    if (!best) return [rawX, rawY];   // no match: keep raw position
 
-    // Intersection car: show at raw position (no scaling)
-    return [rawX, rawY];
+    // Shift the car laterally by (S-1)*perp so it stays in its scaled lane
+    let S = LANE_WIDTH_SCALE;
+    return [
+        rawX + bestPerp * (S - 1) * best.px,
+        rawY + bestPerp * (S - 1) * best.py
+    ];
 }
 
 function initSettings() {
