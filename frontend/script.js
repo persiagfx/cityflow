@@ -64,6 +64,8 @@ var controls = new function () {
     this.paused = false;
 };
 
+var baseReplaySpeed = 0.5;  // user's intended speed before lane-scale adjustment
+
 var trafficLightsG = {};
 
 var app, viewport, renderer, simulatorContainer, carContainer, trafficLightContainer;
@@ -249,12 +251,13 @@ document.getElementById("fast-btn").addEventListener("click", function() {
     updateReplaySpeed(controls.replaySpeed + 0.1);
 })
 
-function updateReplaySpeed(speed){
+function updateReplaySpeed(speed, isAuto) {
     speed = Math.min(speed, 1);
-    speed = Math.max(speed, 0);
+    speed = Math.max(speed, 0.01);
     controls.replaySpeed = speed;
     replayControlDom.value = speed * 100;
     replaySpeedDom.innerHTML = speed.toFixed(2);
+    if (!isAuto) baseReplaySpeed = speed;
 }
 
 updateReplaySpeed(0.5);
@@ -912,12 +915,13 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     }
 
     if (best) {
-        // Scale perp to keep car in its (now wider) lane.
-        // Also scale along so cars back away from the growing intersection insets:
-        //   at the from-node end (t=0) shift +fi*(S-1), at to-node end (t=1) shift -ti*(S-1).
         let S = LANE_WIDTH_SCALE;
         let t = best.len > 0 ? bestAlong / best.len : 0;
         let scaledAlong = bestAlong + (S - 1) * (best.fi * (1 - t) - best.ti * t);
+        // Hard-clamp: ensure car never falls inside the scaled intersection inset zone
+        let minA = best.fi * S;
+        let maxA = best.len - best.ti * S;
+        if (maxA > minA) scaledAlong = Math.max(minA, Math.min(maxA, scaledAlong));
         return [
             best.p1x + scaledAlong * best.ddx + bestPerp * S * best.px,
             best.p1y + scaledAlong * best.ddy + bestPerp * S * best.py
@@ -974,6 +978,7 @@ function initSettings() {
     laneScaleSlider.addEventListener('input', function() {
         LANE_WIDTH_SCALE = this.value / 100;
         laneScaleVal.innerText = LANE_WIDTH_SCALE.toFixed(2);
+        updateReplaySpeed(baseReplaySpeed / LANE_WIDTH_SCALE, true);
         if (ready) drawRoadnet();
     });
 
