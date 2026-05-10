@@ -399,8 +399,8 @@ function drawRoadnet() {
     window.intersectionSkipPolygons = [];
     window.intersectionSkipCircles = [];
     let laneSkipPadPx = Math.min(
-        56,
-        Math.max(10, window.roadSegMaxWidth * LANE_WIDTH_SCALE * 0.30)
+        80,
+        Math.max(14, window.roadSegMaxWidth * LANE_WIDTH_SCALE * 0.42)
     );
     let padSim = laneSkipPadPx / Math.max(LANE_WIDTH_SCALE, 1e-6);
     for (let nid in nodes) {
@@ -965,26 +965,39 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     if (junctionPos) return junctionPos;
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
-    let best = null, bestScore = Infinity, bestPerp = 0;
+    let S_lane = LANE_WIDTH_SCALE;
+    let dotFloor = S_lane <= 1.001 ? 0.5 : Math.min(0.88, 0.52 + (S_lane - 1) * 0.19);
+    let slackAlong = window.roadSegMaxWidth * (0.55 + S_lane * 0.28);
+    let perpCap = window.roadSegMaxWidth * (1.35 + S_lane * 0.18);
+
+    let best = null, bestScore = Infinity, bestPerp = 0, secondScore = Infinity;
 
     for (let seg of window.roadSegIndex) {
-        // Only consider segments whose direction matches the car's heading
         let dot = cosA * seg.ddx + sinA * seg.ddy;
-        if (dot < 0.5) continue;
+        if (dot < dotFloor) continue;
 
-        // Perpendicular distance from this segment's centreline
-        let rx   = rawX - seg.p1x, ry = rawY - seg.p1y;
+        let rx = rawX - seg.p1x, ry = rawY - seg.p1y;
+        let t = rx * seg.ddx + ry * seg.ddy;
+        if (t < -slackAlong || t > seg.len + slackAlong) continue;
+
         let perp = rx * seg.px + ry * seg.py;
+        if (Math.abs(perp) > perpCap) continue;
 
-        // Reject segments that are clearly the wrong road (too far sideways)
-        if (Math.abs(perp) > window.roadSegMaxWidth * 1.5) continue;
-
-        // Lower score = better match (small lateral offset + good angle alignment)
         let score = Math.abs(perp) / dot;
-        if (score < bestScore) { bestScore = score; bestPerp = perp; best = seg; }
+        if (score < bestScore) {
+            secondScore = bestScore;
+            bestScore = score;
+            bestPerp = perp;
+            best = seg;
+        } else if (score < secondScore) {
+            secondScore = score;
+        }
     }
 
-    if (!best) return [rawX, rawY];   // no match: keep raw position
+    if (!best) return [rawX, rawY];
+
+    if (secondScore < Infinity && secondScore <= bestScore * 1.28)
+        return [rawX, rawY];
 
     let S = LANE_WIDTH_SCALE;
     let nx = rawX + bestPerp * (S - 1) * best.px;
