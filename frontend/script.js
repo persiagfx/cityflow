@@ -394,28 +394,32 @@ function drawRoadnet() {
         }
     }
 
-    // Inside real intersections, lateral lane scaling picks wrong segments and
-    // stacks cars; keep simulation coords there (still scales car sprite width).
-    window.intersectionSkipZones = [];
+    // Skip lateral lane scaling near intersection geometry (wrong segment → pile-up).
+    window.intersectionSkipPolygons = [];
+    window.intersectionSkipCircles = [];
+    let laneSkipPad = Math.min(
+        56,
+        Math.max(10, window.roadSegMaxWidth * LANE_WIDTH_SCALE * 0.30)
+    );
     for (let nid in nodes) {
         let nd = nodes[nid];
         if (nd.virtual) continue;
         let cx = nd.point.x, cy = nd.point.y;
-        let maxExt = 0;
-        if (!nd.outline || nd.outline.length < 4) {
-            let fb = (nd.width != null ? nd.width : 40) * LANE_WIDTH_SCALE * 0.45;
-            window.intersectionSkipZones.push({ cx, cy, r2: fb * fb });
+        if (nd.outline && nd.outline.length >= 6) {
+            let verts = [];
+            for (let i = 0; i < nd.outline.length; i += 2) {
+                let vx = nd.outline[i], vy = -nd.outline[i + 1];
+                verts.push({
+                    x: cx + (vx - cx) * LANE_WIDTH_SCALE,
+                    y: cy + (vy - cy) * LANE_WIDTH_SCALE
+                });
+            }
+            window.intersectionSkipPolygons.push({ verts, pad: laneSkipPad });
             continue;
         }
-        for (let i = 0; i < nd.outline.length; i += 2) {
-            let vx = nd.outline[i], vy = -nd.outline[i + 1];
-            let sx = cx + (vx - cx) * LANE_WIDTH_SCALE;
-            let sy = cy + (vy - cy) * LANE_WIDTH_SCALE;
-            let d = Math.hypot(sx - cx, sy - cy);
-            if (d > maxExt) maxExt = d;
-        }
-        let r = maxExt * 0.30 + 6;
-        window.intersectionSkipZones.push({ cx, cy, r2: r * r });
+        let ext = (nd.width != null ? nd.width : 42) * LANE_WIDTH_SCALE;
+        let r = ext * 1.05 + laneSkipPad;
+        window.intersectionSkipCircles.push({ cx, cy, r2: r * r });
     }
 
     /**
@@ -884,6 +888,49 @@ function pixiToHex(color) {
     return '#' + color.toString(16).padStart(6, '0');
 }
 
+function pointInPolygon2(px, py, verts) {
+    let inside = false;
+    let n = verts.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+        let xi = verts[i].x, yi = verts[i].y;
+        let xj = verts[j].x, yj = verts[j].y;
+        let crosses = ((yi > py) !== (yj > py)) &&
+            (px < (xj - xi) * (py - yi) / (yj - yi + 1e-14) + xi);
+        if (crosses) inside = !inside;
+    }
+    return inside;
+}
+
+function distPointToSeg2(px, py, ax, ay, bx, by) {
+    let dx = bx - ax, dy = by - ay;
+    let l2 = dx * dx + dy * dy;
+    if (l2 < 1e-14) return Math.hypot(px - ax, py - ay);
+    let t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+    return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+}
+
+function carInsideIntersectionSkip(rawX, rawY) {
+    if (window.intersectionSkipPolygons && window.intersectionSkipPolygons.length) {
+        for (let poly of window.intersectionSkipPolygons) {
+            let verts = poly.verts, pad = poly.pad;
+            if (pointInPolygon2(rawX, rawY, verts)) return true;
+            let n = verts.length;
+            for (let i = 0; i < n; i++) {
+                let a = verts[i], b = verts[(i + 1) % n];
+                if (distPointToSeg2(rawX, rawY, a.x, a.y, b.x, b.y) <= pad)
+                    return true;
+            }
+        }
+    }
+    if (window.intersectionSkipCircles && window.intersectionSkipCircles.length) {
+        for (let z of window.intersectionSkipCircles) {
+            let dx = rawX - z.cx, dy = rawY - z.cy;
+            if (dx * dx + dy * dy <= z.r2) return true;
+        }
+    }
+    return false;
+}
+
 /**
  * Scale a car's perpendicular distance from its road reference line by
  * LANE_WIDTH_SCALE, so that cars stay inside their lanes when lane width
@@ -899,13 +946,8 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     if (LANE_WIDTH_SCALE === 1.0 || !window.roadSegIndex || window.roadSegIndex.length === 0)
         return [rawX, rawY];
 
-    if (window.intersectionSkipZones && window.intersectionSkipZones.length) {
-        for (let z of window.intersectionSkipZones) {
-            let dx = rawX - z.cx, dy = rawY - z.cy;
-            if (dx * dx + dy * dy <= z.r2)
-                return [rawX, rawY];
-        }
-    }
+    if (carInsideIntersectionSkip(rawX, rawY))
+        return [rawX, rawY];
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
     let best = null, bestScore = Infinity, bestPerp = 0;
@@ -929,12 +971,13 @@ function scaledCarPos(rawX, rawY, pixiRot) {
 
     if (!best) return [rawX, rawY];   // no match: keep raw position
 
-    // Shift the car laterally by (S-1)*perp so it stays in its scaled lane
     let S = LANE_WIDTH_SCALE;
-    return [
-        rawX + bestPerp * (S - 1) * best.px,
-        rawY + bestPerp * (S - 1) * best.py
-    ];
+    let nx = rawX + bestPerp * (S - 1) * best.px;
+    let ny = rawY + bestPerp * (S - 1) * best.py;
+    let maxShift = window.roadSegMaxWidth * LANE_WIDTH_SCALE * 1.15;
+    if (Math.hypot(nx - rawX, ny - rawY) > maxShift)
+        return [rawX, rawY];
+    return [nx, ny];
 }
 
 function initSettings() {
