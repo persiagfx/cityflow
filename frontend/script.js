@@ -394,36 +394,28 @@ function drawRoadnet() {
         }
     }
 
-    // Intersections: drawNode scales outline from centre by LANE_WIDTH_SCALE; cars must use the
-    // same radial mapping inside the junction (sim-outline coords), not raw sim XY alone.
-    window.intersectionSkipPolygons = [];
-    window.intersectionSkipCircles = [];
-    let laneSkipPadPx = Math.min(
-        80,
-        Math.max(14, window.roadSegMaxWidth * LANE_WIDTH_SCALE * 0.42)
-    );
-    let padSim = laneSkipPadPx / Math.max(LANE_WIDTH_SCALE, 1e-6);
+    // Loose disk per real intersection: inside here we match road segments without clamping
+    // projection t (cars past segment ends still get correct lateral offset). Radial mapping
+    // from the node centre is wrong for grid traffic (distorts along-road motion).
+    window.junctionMatchDisks = [];
+    let Sdraw = LANE_WIDTH_SCALE;
+    let diskExtra = Math.min(110, window.roadSegMaxWidth * Sdraw * 0.55);
     for (let nid in nodes) {
         let nd = nodes[nid];
         if (nd.virtual) continue;
         let cx = nd.point.x, cy = nd.point.y;
-        if (nd.outline && nd.outline.length >= 6) {
-            let vertsSim = [];
+        let maxExt = 0;
+        if (nd.outline && nd.outline.length >= 4) {
             for (let i = 0; i < nd.outline.length; i += 2) {
                 let vx = nd.outline[i], vy = -nd.outline[i + 1];
-                vertsSim.push({ x: vx, y: vy });
+                let d = Math.hypot(vx - cx, vy - cy);
+                if (d > maxExt) maxExt = d;
             }
-            window.intersectionSkipPolygons.push({
-                verts: vertsSim,
-                pad: padSim,
-                cx,
-                cy
-            });
-            continue;
+        } else {
+            maxExt = (nd.width != null ? nd.width : 42) * 0.72;
         }
-        let ext = (nd.width != null ? nd.width : 42);
-        let rSim = ext * 0.65 + padSim;
-        window.intersectionSkipCircles.push({ cx, cy, r2: rSim * rSim });
+        let r = maxExt * 1.52 + diskExtra;
+        window.junctionMatchDisks.push({ cx, cy, r2: r * r });
     }
 
     /**
@@ -892,60 +884,6 @@ function pixiToHex(color) {
     return '#' + color.toString(16).padStart(6, '0');
 }
 
-function pointInPolygon2(px, py, verts) {
-    let inside = false;
-    let n = verts.length;
-    for (let i = 0, j = n - 1; i < n; j = i++) {
-        let xi = verts[i].x, yi = verts[i].y;
-        let xj = verts[j].x, yj = verts[j].y;
-        let crosses = ((yi > py) !== (yj > py)) &&
-            (px < (xj - xi) * (py - yi) / (yj - yi + 1e-14) + xi);
-        if (crosses) inside = !inside;
-    }
-    return inside;
-}
-
-function distPointToSeg2(px, py, ax, ay, bx, by) {
-    let dx = bx - ax, dy = by - ay;
-    let l2 = dx * dx + dy * dy;
-    if (l2 < 1e-14) return Math.hypot(px - ax, py - ay);
-    let t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
-    return Math.hypot(px - ax - t * dx, py - ay - t * dy);
-}
-
-/**
- * If the car is in junction space (same coords as unscaled outline), map it like drawNode:
- *   P' = C + (P - C) * LANE_WIDTH_SCALE
- * Returns null when outside all junction zones (caller applies lane segment logic).
- */
-function radialIntersectionCarPos(rawX, rawY) {
-    let S = LANE_WIDTH_SCALE;
-    if (window.intersectionSkipPolygons && window.intersectionSkipPolygons.length) {
-        for (let poly of window.intersectionSkipPolygons) {
-            let verts = poly.verts, pad = poly.pad, cx = poly.cx, cy = poly.cy;
-            if (pointInPolygon2(rawX, rawY, verts)) {
-                return [cx + (rawX - cx) * S, cy + (rawY - cy) * S];
-            }
-            let n = verts.length;
-            for (let i = 0; i < n; i++) {
-                let a = verts[i], b = verts[(i + 1) % n];
-                if (distPointToSeg2(rawX, rawY, a.x, a.y, b.x, b.y) <= pad) {
-                    return [cx + (rawX - cx) * S, cy + (rawY - cy) * S];
-                }
-            }
-        }
-    }
-    if (window.intersectionSkipCircles && window.intersectionSkipCircles.length) {
-        for (let z of window.intersectionSkipCircles) {
-            let dx = rawX - z.cx, dy = rawY - z.cy;
-            if (dx * dx + dy * dy <= z.r2) {
-                return [z.cx + dx * S, z.cy + dy * S];
-            }
-        }
-    }
-    return null;
-}
-
 /**
  * Scale a car's perpendicular distance from its road reference line by
  * LANE_WIDTH_SCALE, so that cars stay inside their lanes when lane width
@@ -961,8 +899,16 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     if (LANE_WIDTH_SCALE === 1.0 || !window.roadSegIndex || window.roadSegIndex.length === 0)
         return [rawX, rawY];
 
-    let junctionPos = radialIntersectionCarPos(rawX, rawY);
-    if (junctionPos) return junctionPos;
+    let inJunction = false;
+    if (window.junctionMatchDisks && window.junctionMatchDisks.length) {
+        for (let d of window.junctionMatchDisks) {
+            let dx = rawX - d.cx, dy = rawY - d.cy;
+            if (dx * dx + dy * dy <= d.r2) {
+                inJunction = true;
+                break;
+            }
+        }
+    }
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
     let S_lane = LANE_WIDTH_SCALE;
@@ -970,39 +916,70 @@ function scaledCarPos(rawX, rawY, pixiRot) {
     let slackAlong = window.roadSegMaxWidth * (0.55 + S_lane * 0.28);
     let perpCap = window.roadSegMaxWidth * (1.35 + S_lane * 0.18);
 
-    let best = null, bestScore = Infinity, bestPerp = 0, secondScore = Infinity;
+    if (inJunction) {
+        perpCap = window.roadSegMaxWidth * (1.62 + S_lane * 0.42);
+        dotFloor = Math.max(0.48, dotFloor - 0.06);
+    }
+
+    let hugeT = 1e9;
+    let best = null, bestPerp = 0;
+    let bestScore = Infinity, secondScore = Infinity;
+    let bestAlign = -2, secondAlign = -2;
 
     for (let seg of window.roadSegIndex) {
         let dot = cosA * seg.ddx + sinA * seg.ddy;
-        if (dot < dotFloor) continue;
+        let align = Math.abs(dot);
+
+        if (inJunction) {
+            if (align < dotFloor) continue;
+        } else {
+            if (dot < dotFloor) continue;
+        }
 
         let rx = rawX - seg.p1x, ry = rawY - seg.p1y;
         let t = rx * seg.ddx + ry * seg.ddy;
-        if (t < -slackAlong || t > seg.len + slackAlong) continue;
+        let slack = inJunction ? hugeT : slackAlong;
+        if (t < -slack || t > seg.len + slack) continue;
 
         let perp = rx * seg.px + ry * seg.py;
         if (Math.abs(perp) > perpCap) continue;
 
-        let score = Math.abs(perp) / dot;
-        if (score < bestScore) {
-            secondScore = bestScore;
-            bestScore = score;
-            bestPerp = perp;
-            best = seg;
-        } else if (score < secondScore) {
-            secondScore = score;
+        if (inJunction) {
+            if (align > bestAlign) {
+                secondAlign = bestAlign;
+                bestAlign = align;
+                bestPerp = perp;
+                best = seg;
+            } else if (align > secondAlign) {
+                secondAlign = align;
+            }
+        } else {
+            let score = Math.abs(perp) / Math.max(dot, 0.08);
+            if (score < bestScore) {
+                secondScore = bestScore;
+                bestScore = score;
+                bestPerp = perp;
+                best = seg;
+            } else if (score < secondScore) {
+                secondScore = score;
+            }
         }
     }
 
     if (!best) return [rawX, rawY];
 
-    if (secondScore < Infinity && secondScore <= bestScore * 1.28)
-        return [rawX, rawY];
+    if (inJunction) {
+        if (secondAlign > -1 && secondAlign >= bestAlign - 0.11)
+            return [rawX, rawY];
+    } else {
+        if (secondScore < Infinity && secondScore <= bestScore * 1.28)
+            return [rawX, rawY];
+    }
 
     let S = LANE_WIDTH_SCALE;
     let nx = rawX + bestPerp * (S - 1) * best.px;
     let ny = rawY + bestPerp * (S - 1) * best.py;
-    let maxShift = window.roadSegMaxWidth * LANE_WIDTH_SCALE * 1.15;
+    let maxShift = window.roadSegMaxWidth * LANE_WIDTH_SCALE * 1.2;
     if (Math.hypot(nx - rawX, ny - rawY) > maxShift)
         return [rawX, rawY];
     return [nx, ny];
