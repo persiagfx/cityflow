@@ -924,22 +924,8 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         ];
     }
 
-    // ── Intersection fallback: scale radially from nearest node centre ─────
-    // The node polygon is also scaled from node.point, so this stays aligned.
-    if (window.nodePositions && window.nodePositions.length > 0) {
-        let nearest = null, nearestD2 = Infinity;
-        for (let np of window.nodePositions) {
-            let d2 = (rawX - np.x) * (rawX - np.x) + (rawY - np.y) * (rawY - np.y);
-            if (d2 < nearestD2) { nearestD2 = d2; nearest = np; }
-        }
-        if (nearest) {
-            return [
-                nearest.x + (rawX - nearest.x) * LANE_WIDTH_SCALE,
-                nearest.y + (rawY - nearest.y) * LANE_WIDTH_SCALE
-            ];
-        }
-    }
-
+    // Intersection cars (no matching segment): keep raw simulation position.
+    // The intersection polygon is larger, so they appear naturally inside it.
     return [rawX, rawY];
 }
 
