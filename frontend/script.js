@@ -784,7 +784,6 @@ function drawStep(step) {
         // ── Lane-width scale: shift car perpendicular to road ───────────────
         let pixiRot = 2*Math.PI - parseFloat(carLog[2]);
         let scaledPos = scaledCarPos(position[0], position[1], pixiRot);
-        if (!scaledPos) continue;   // car is inside intersection — skip drawing
 
         carPool[poolIdx][0].position.set(scaledPos[0], scaledPos[1]);
         carPool[poolIdx][0].rotation = pixiRot;
@@ -884,27 +883,19 @@ function scaledCarPos(rawX, rawY, pixiRot) {
         return [rawX, rawY];
 
     let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
-
-    // Find the best-matching road segment with NO bounds limit so segment lines
-    // are extended through intersection nodes.  Score = |perp| / dot so that
-    // cars with a good angle match AND small lateral offset win; dot is capped
-    // at 0.1 to avoid division-by-zero on near-perpendicular segments.
     let best = null, bestScore = Infinity, bestPerp = 0, bestAlong = 0;
 
     for (let seg of window.roadSegIndex) {
         let dot = cosA * seg.ddx + sinA * seg.ddy;
-        if (dot < 0.5) continue;            // skip opposite / perpendicular roads
+        if (dot < 0.5) continue;
 
         let rx    = rawX - seg.p1x, ry = rawY - seg.p1y;
         let along = rx * seg.ddx + ry * seg.ddy;
         let perp  = rx * seg.px  + ry * seg.py;
 
-        // Allow cars well past the segment end (inside intersection) to still match
-        let margin = seg.len + window.roadSegMaxWidth * 2;
+        let margin = seg.len * 0.15 + 8;
         if (along < -margin || along > seg.len + margin) continue;
-
-        // Reject if car is too far perpendicularly — likely a parallel road
-        if (Math.abs(perp) > window.roadSegMaxWidth * 2) continue;
+        if (Math.abs(perp) > window.roadSegMaxWidth * 1.5) continue;
 
         let score = Math.abs(perp) / dot;
         if (score < bestScore) {
@@ -917,18 +908,14 @@ function scaledCarPos(rawX, rawY, pixiRot) {
 
     if (best) {
         let S = LANE_WIDTH_SCALE;
-        // Clamp along to segment bounds so intersection cars snap to road boundary
-        let clampedAlong = Math.max(0, Math.min(best.len, bestAlong));
-        let t = best.len > 0 ? clampedAlong / best.len : 0;
-        let scaledAlong = clampedAlong + (S - 1) * (best.fi * (1 - t) - best.ti * t);
         return [
-            best.p1x + scaledAlong * best.ddx + bestPerp * S * best.px,
-            best.p1y + scaledAlong * best.ddy + bestPerp * S * best.py
+            best.p1x + bestAlong * best.ddx + bestPerp * S * best.px,
+            best.p1y + bestAlong * best.ddy + bestPerp * S * best.py
         ];
     }
 
-    // No matching segment at all: hide the car (return null → caller skips drawing)
-    return null;
+    // Intersection car: show at raw position (no scaling)
+    return [rawX, rawY];
 }
 
 function initSettings() {
