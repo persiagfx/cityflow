@@ -28,8 +28,8 @@ CAR_COLORS_NUM = CAR_COLORS.length;
 // Visual settings — controlled by the Settings panel in the UI
 var LANE_WIDTH_SCALE  = 1.0;
 var CAR_SIZE_OVERRIDE = false;
-var CAR_LENGTH_CUSTOM = 5;
-var CAR_WIDTH_CUSTOM  = 2;
+var CAR_LENGTH_CUSTOM = 1.0;   // multiplier (1.0 = simulation size)
+var CAR_WIDTH_CUSTOM  = 1.0;   // multiplier (1.0 = simulation size)
 var VEHICLE_DENSITY   = 1.0;   // 0.1 – 1.0  (fraction of vehicles to display)
 var LANE_DIVIDER_INSET = 0;    // perpendicular offset of divider line from lane boundary
 
@@ -751,16 +751,16 @@ function drawStep(step) {
         carPool[poolIdx][0].name = carLog[3];
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
         carPool[poolIdx][0].tint = CAR_COLORS[carColorId];
-        carPool[poolIdx][0].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
+        carPool[poolIdx][0].width  = CAR_SIZE_OVERRIDE ? length * CAR_LENGTH_CUSTOM : length;
+        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? width  * CAR_WIDTH_CUSTOM  : width;
         carContainer.addChild(carPool[poolIdx][0]);
 
         let laneChange = parseInt(carLog[4]) + 1;
         carPool[poolIdx][1].position.set(position[0], position[1]);
         carPool[poolIdx][1].rotation = pixiRot;
         carPool[poolIdx][1].texture = turnSignalTextures[laneChange];
-        carPool[poolIdx][1].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
+        carPool[poolIdx][1].width  = CAR_SIZE_OVERRIDE ? length * CAR_LENGTH_CUSTOM : length;
+        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? width  * CAR_WIDTH_CUSTOM  : width;
         turnSignalContainer.addChild(carPool[poolIdx][1]);
 
         poolIdx++;
@@ -847,10 +847,10 @@ function initSettings() {
         sizeControls.classList.toggle('d-none', !this.checked);
     });
     document.getElementById('car-length-input').addEventListener('input', function() {
-        CAR_LENGTH_CUSTOM = parseFloat(this.value) || 5;
+        CAR_LENGTH_CUSTOM = parseFloat(this.value) || 1.0;
     });
     document.getElementById('car-width-input').addEventListener('input', function() {
-        CAR_WIDTH_CUSTOM = parseFloat(this.value) || 2;
+        CAR_WIDTH_CUSTOM = parseFloat(this.value) || 1.0;
     });
 
     // --- Lane Width Scale ---
