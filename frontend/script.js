@@ -364,65 +364,6 @@ function drawRoadnet() {
         edges[edge.id] = edge;
     }
 
-    // Build road-segment spatial index used by scaledCarPos().
-    // Each entry stores the segment's unit direction and its left-hand
-    // perpendicular (rotate 90° = [-ddy, ddx]) in screen coordinates.
-    window.roadSegIndex = [];
-    window.roadSegMaxWidth = 0;
-    for (let eid in edges) {
-        let ed = edges[eid];
-        let roadW = ed.laneWidths.reduce((a, b) => a + b, 0);
-        if (roadW > window.roadSegMaxWidth) window.roadSegMaxWidth = roadW;
-        let fromInset = ed.from.virtual ? 0 : ed.from.width;
-        let toInset   = ed.to.virtual   ? 0 : ed.to.width;
-        let npts = ed.points.length;
-
-        for (let i = 1; i < npts; i++) {
-            let p1 = ed.points[i-1], p2 = ed.points[i];
-            let dx = p2.x - p1.x, dy = p2.y - p1.y;
-            let len = Math.sqrt(dx*dx + dy*dy);
-            if (len < 0.001) continue;
-            dx /= len; dy /= len;
-            window.roadSegIndex.push({
-                p1x: p1.x, p1y: p1.y,
-                ddx: dx,   ddy: dy,
-                px: -dy,   py:  dx,
-                len,
-                fi: (i === 1)      ? fromInset : 0,
-                ti: (i === npts-1) ? toInset   : 0
-            });
-        }
-    }
-
-    // Inside the intersection outline, use the same radial map as drawNode (centre + (P−C)*S).
-    // Segment matching with unbounded t inside a large disk was pulling cars to wrong roads.
-    window.intersectionRadialZones = [];
-    window.intersectionRadialCircles = [];
-    let Sdraw = LANE_WIDTH_SCALE;
-    let padBand = Math.min(
-        88,
-        Math.max(16, window.roadSegMaxWidth * Sdraw * 0.38)
-    );
-    for (let nid in nodes) {
-        let nd = nodes[nid];
-        if (nd.virtual) continue;
-        let cx = nd.point.x, cy = nd.point.y;
-        if (nd.outline && nd.outline.length >= 6) {
-            let verts = [];
-            for (let i = 0; i < nd.outline.length; i += 2) {
-                verts.push({
-                    x: nd.outline[i],
-                    y: -nd.outline[i + 1]
-                });
-            }
-            window.intersectionRadialZones.push({ verts, pad: padBand, cx, cy });
-        } else {
-            let ext = (nd.width != null ? nd.width : 42);
-            let r = ext * 0.88 + padBand;
-            window.intersectionRadialCircles.push({ cx, cy, r2: r * r });
-        }
-    }
-
     /**
      * Draw Map
      */
@@ -803,25 +744,23 @@ function drawStep(step) {
         length = parseFloat(carLog[5]);
         width  = parseFloat(carLog[6]);
 
-        // ── Lane-width scale: shift car perpendicular to road ───────────────
         let pixiRot = 2*Math.PI - parseFloat(carLog[2]);
-        let scaledPos = scaledCarPos(position[0], position[1], pixiRot);
 
-        carPool[poolIdx][0].position.set(scaledPos[0], scaledPos[1]);
+        carPool[poolIdx][0].position.set(position[0], position[1]);
         carPool[poolIdx][0].rotation = pixiRot;
         carPool[poolIdx][0].name = carLog[3];
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
         carPool[poolIdx][0].tint = CAR_COLORS[carColorId];
         carPool[poolIdx][0].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width * LANE_WIDTH_SCALE;
+        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
         carContainer.addChild(carPool[poolIdx][0]);
 
         let laneChange = parseInt(carLog[4]) + 1;
-        carPool[poolIdx][1].position.set(scaledPos[0], scaledPos[1]);
+        carPool[poolIdx][1].position.set(position[0], position[1]);
         carPool[poolIdx][1].rotation = pixiRot;
         carPool[poolIdx][1].texture = turnSignalTextures[laneChange];
         carPool[poolIdx][1].width  = CAR_SIZE_OVERRIDE ? CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width * LANE_WIDTH_SCALE;
+        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? CAR_WIDTH_CUSTOM  : width;
         turnSignalContainer.addChild(carPool[poolIdx][1]);
 
         poolIdx++;
@@ -887,120 +826,6 @@ function hexToPixi(hex) {
 
 function pixiToHex(color) {
     return '#' + color.toString(16).padStart(6, '0');
-}
-
-function pointInPolygon2(px, py, verts) {
-    let inside = false;
-    let n = verts.length;
-    for (let i = 0, j = n - 1; i < n; j = i++) {
-        let xi = verts[i].x, yi = verts[i].y;
-        let xj = verts[j].x, yj = verts[j].y;
-        let crosses = ((yi > py) !== (yj > py)) &&
-            (px < (xj - xi) * (py - yi) / (yj - yi + 1e-14) + xi);
-        if (crosses) inside = !inside;
-    }
-    return inside;
-}
-
-function distPointToSeg2(px, py, ax, ay, bx, by) {
-    let dx = bx - ax, dy = by - ay;
-    let l2 = dx * dx + dy * dy;
-    if (l2 < 1e-14) return Math.hypot(px - ax, py - ay);
-    let t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
-    return Math.hypot(px - ax - t * dx, py - ay - t * dy);
-}
-
-/**
- * Same radial transform as drawNode for intersection fill: P' = C + (P − C) * S.
- */
-function radialJunctionCarPos(rawX, rawY) {
-    let S = LANE_WIDTH_SCALE;
-    if (window.intersectionRadialZones && window.intersectionRadialZones.length) {
-        for (let z of window.intersectionRadialZones) {
-            let verts = z.verts, pad = z.pad, cx = z.cx, cy = z.cy;
-            if (pointInPolygon2(rawX, rawY, verts)) {
-                return [cx + (rawX - cx) * S, cy + (rawY - cy) * S];
-            }
-            let n = verts.length;
-            for (let i = 0; i < n; i++) {
-                let a = verts[i], b = verts[(i + 1) % n];
-                if (distPointToSeg2(rawX, rawY, a.x, a.y, b.x, b.y) <= pad) {
-                    return [cx + (rawX - cx) * S, cy + (rawY - cy) * S];
-                }
-            }
-        }
-    }
-    if (window.intersectionRadialCircles && window.intersectionRadialCircles.length) {
-        for (let c of window.intersectionRadialCircles) {
-            let dx = rawX - c.cx, dy = rawY - c.cy;
-            if (dx * dx + dy * dy <= c.r2) {
-                return [c.cx + dx * S, c.cy + dy * S];
-            }
-        }
-    }
-    return null;
-}
-
-/**
- * Scale a car's perpendicular distance from its road reference line by
- * LANE_WIDTH_SCALE, so that cars stay inside their lanes when lane width
- * changes.  Uses the pre-built roadSegIndex to find the nearest matching
- * road segment (matched by direction angle).
- *
- * @param {number} rawX  - car X in screen coords (after transCoord)
- * @param {number} rawY  - car Y in screen coords
- * @param {number} pixiRot - car rotation in PixiJS radians (2π − simAngle)
- * @returns {[number, number]} scaled [x, y]
- */
-function scaledCarPos(rawX, rawY, pixiRot) {
-    if (LANE_WIDTH_SCALE === 1.0 || !window.roadSegIndex || window.roadSegIndex.length === 0)
-        return [rawX, rawY];
-
-    let radial = radialJunctionCarPos(rawX, rawY);
-    if (radial) return radial;
-
-    let cosA = Math.cos(pixiRot), sinA = Math.sin(pixiRot);
-    let S_lane = LANE_WIDTH_SCALE;
-    let dotFloor = S_lane <= 1.001 ? 0.5 : Math.min(0.88, 0.52 + (S_lane - 1) * 0.19);
-    let slackAlong = window.roadSegMaxWidth * (0.55 + S_lane * 0.28);
-    let perpCap = window.roadSegMaxWidth * (1.35 + S_lane * 0.18);
-
-    let best = null, bestScore = Infinity, secondScore = Infinity, bestPerp = 0;
-
-    for (let seg of window.roadSegIndex) {
-        let dot = cosA * seg.ddx + sinA * seg.ddy;
-        if (dot < dotFloor) continue;
-
-        let rx = rawX - seg.p1x, ry = rawY - seg.p1y;
-        let t = rx * seg.ddx + ry * seg.ddy;
-        if (t < -slackAlong || t > seg.len + slackAlong) continue;
-
-        let perp = rx * seg.px + ry * seg.py;
-        if (Math.abs(perp) > perpCap) continue;
-
-        let score = Math.abs(perp) / Math.max(dot, 0.08);
-        if (score < bestScore) {
-            secondScore = bestScore;
-            bestScore = score;
-            bestPerp = perp;
-            best = seg;
-        } else if (score < secondScore) {
-            secondScore = score;
-        }
-    }
-
-    if (!best) return [rawX, rawY];
-
-    if (secondScore < Infinity && secondScore <= bestScore * 1.28)
-        return [rawX, rawY];
-
-    let S = LANE_WIDTH_SCALE;
-    let nx = rawX + bestPerp * (S - 1) * best.px;
-    let ny = rawY + bestPerp * (S - 1) * best.py;
-    let maxShift = window.roadSegMaxWidth * LANE_WIDTH_SCALE * 1.2;
-    if (Math.hypot(nx - rawX, ny - rawY) > maxShift)
-        return [rawX, rawY];
-    return [nx, ny];
 }
 
 function initSettings() {
