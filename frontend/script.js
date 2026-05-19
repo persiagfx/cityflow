@@ -531,18 +531,10 @@ function drawNode(node, graphics) {
     let cx = node.point.x, cy = node.point.y;
     let scaledOutline = [];
 
-    // Shrink the intersection polygon to match node.width so that cars waiting
-    // at the stop line (positioned at ~node.width from centre) appear OUTSIDE
-    // the drawn polygon instead of visually inside the intersection area.
-    let maxExtent = 0;
-    for (let k = 0; k < outline.length; k++) maxExtent = Math.max(maxExtent, Math.abs(outline[k]));
-    let nodeShrink = (node.width && maxExtent > 0) ? node.width / maxExtent : 1.0;
-
     for (let i = 0; i < outline.length; i += 2) {
-        // Convert outline vertex to screen coords (y-flip), shrink to node.width,
-        // then scale from node centre by LANE_WIDTH_SCALE
-        let ox = outline[i]      * nodeShrink;
-        let oy = -outline[i + 1] * nodeShrink;
+        // Convert outline vertex to screen coords (y-flip) then scale from node centre
+        let ox = outline[i];
+        let oy = -outline[i + 1];
         let sx = cx + (ox - cx) * LANE_WIDTH_SCALE;
         let sy = cy + (oy - cy) * LANE_WIDTH_SCALE;
         scaledOutline.push(sx, sy);
