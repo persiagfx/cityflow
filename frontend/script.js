@@ -31,7 +31,9 @@ var CAR_SIZE_OVERRIDE = false;
 var CAR_LENGTH_CUSTOM = 1.0;   // multiplier (1.0 = simulation size)
 var CAR_WIDTH_CUSTOM  = 1.0;   // multiplier (1.0 = simulation size)
 var VEHICLE_DENSITY   = 1.0;   // 0.1 – 1.0  (fraction of vehicles to display)
-var MIN_LANE_WIDTH    = Infinity; // populated from roadnet; caps visual car width
+var CAR_BRIGHTNESS    = 1.0;   // 0.3 – 2.0  (colour brightness multiplier)
+var MIN_LANE_WIDTH          = Infinity; // populated from roadnet; caps visual car width
+var INTERSECTION_NODE_WIDTH = 0;        // width of main intersection node
 var LANE_DIVIDER_INSET = 0;    // perpendicular offset of divider line from lane boundary
 
 NUM_CAR_POOL = 150000;
@@ -373,6 +375,14 @@ function drawRoadnet() {
         if (lw) for (let w of lw) if (w < MIN_LANE_WIDTH) MIN_LANE_WIDTH = w;
     }
     if (!isFinite(MIN_LANE_WIDTH)) MIN_LANE_WIDTH = 4.0; // fallback
+
+    // Find the width of the main (non-virtual) intersection for lane-scale
+    // position correction.  Used in drawStep to push cars to the visual stop line.
+    INTERSECTION_NODE_WIDTH = 0;
+    for (let nid in nodes) {
+        if (!nodes[nid].virtual && nodes[nid].width)
+            INTERSECTION_NODE_WIDTH = Math.max(INTERSECTION_NODE_WIDTH, nodes[nid].width);
+    }
 
     /**
      * Draw Map
@@ -742,40 +752,42 @@ function drawStep(step) {
     let carLog, position, length, width;
     let poolIdx = 0;   // separate pool pointer so density-skipped slots are reused
 
-    // ── Safe-size computation (only needed when override is active) ─────────
-    // Pass 1: collect raw positions/angles for ALL cars this step (no density
-    //         filter — hidden cars still occupy physical space).
-    // Pass 2: for each car find the closest co-directional neighbour
-    //         (angle mod π difference < 0.15 rad ≈ 8.6°).  The centre-to-centre
-    //         distance to that neighbour is the maximum safe visual length.
-    // Width is capped to MIN_LANE_WIDTH (smallest lane in the roadnet).
-    let _safeLen = null;
+    // ── Global uniform safe-length cap (only when override is active) ────────
+    // Finds the shortest longitudinal (along-road) gap between any two same-
+    // direction, same-lane cars.  ALL cars are capped to that value so every
+    // car is the exact same visual size and none overlap.
+    // Lateral pairs (side-by-side in adjacent lanes) are excluded — they don't
+    // affect length overlap.
+    let _globalSafeLen = Infinity;
     if (CAR_SIZE_OVERRIDE) {
-        let _px = [], _py = [], _pa = [], _pid = [];
+        let _px = [], _py = [], _pa = [];
         for (let i = 0, len = carLogs.length - 1; i < len; i++) {
             let p = carLogs[i].split(' ');
             if (p.length < 4) continue;
             _px.push(parseFloat(p[0]));
             _py.push(parseFloat(p[1]));
             _pa.push(parseFloat(p[2]));
-            _pid.push(p[3]);
         }
-        _safeLen = new Map();
         let n = _px.length;
+        let _laneW = isFinite(MIN_LANE_WIDTH) ? MIN_LANE_WIDTH : 2.0;
         for (let i = 0; i < n; i++) {
-            let best = Infinity;
+            let rfx = Math.cos(_pa[i]), rfy = -Math.sin(_pa[i]); // forward (screen)
+            let rlx = Math.sin(_pa[i]), rly =  Math.cos(_pa[i]); // lateral (screen)
             for (let j = 0; j < n; j++) {
                 if (i === j) continue;
-                let da = Math.abs(_pa[i] - _pa[j]) % Math.PI;
-                if (da > Math.PI / 2) da = Math.PI - da; // fold to [0, π/2]
-                if (da > 0.15) continue;                  // skip cross-direction cars
-                let dx = _px[i] - _px[j], dy = _py[i] - _py[j];
-                let d = dx * dx + dy * dy;
-                if (d < best) best = d;
+                // Same direction only (NOT opposite direction)
+                let da = Math.abs(_pa[i] - _pa[j]) % (2 * Math.PI);
+                if (da > Math.PI) da = 2 * Math.PI - da;
+                if (da > 0.3) continue;
+                let dx = _px[j] - _px[i], dy = _py[i] - _py[j]; // screen-space delta
+                let lon = dx * rfx + dy * rfy;  // longitudinal component
+                let lat = Math.abs(dx * rlx + dy * rly); // lateral component
+                if (lat > _laneW * 0.75) continue; // skip adjacent-lane pairs
+                if (lon <= 0) continue;             // only the car ahead matters
+                if (lon < _globalSafeLen) _globalSafeLen = lon;
             }
-            // Use 0.95 × centre-to-centre distance as max visual length
-            _safeLen.set(_pid[i], best === Infinity ? Infinity : Math.sqrt(best) * 0.95);
         }
+        _globalSafeLen *= 0.95;
     }
 
     for (let i = 0, len = carLogs.length - 1;i < len;++i) {
@@ -787,18 +799,48 @@ function drawStep(step) {
         if (VEHICLE_DENSITY < 1.0 &&
             (stringHash(carLog[3]) % 1000) / 1000 >= VEHICLE_DENSITY) continue;
 
-        position = transCoord([parseFloat(carLog[0]), parseFloat(carLog[1])]);
+        let rawX = parseFloat(carLog[0]);
+        let rawY = parseFloat(carLog[1]);
+        let simAngle = parseFloat(carLog[2]);
         length = parseFloat(carLog[5]);
         width  = parseFloat(carLog[6]);
 
-        let pixiRot = 2*Math.PI - parseFloat(carLog[2]);
+        let pixiRot = 2*Math.PI - simAngle;
+
+        // ── Lane-width position scaling ────────────────────────────────────
+        // When LANE_WIDTH_SCALE≠1 the roads are drawn wider/narrower but the
+        // simulation positions are unchanged.  We decompose each car's screen
+        // position into along-road and lateral components (relative to the
+        // nearest intersection centre at origin), then:
+        //   • lateral  – always scaled by LANE_WIDTH_SCALE so cars sit in
+        //                the correct visual lane.
+        //   • along    – within the intersection zone (|along| ≤ nodeW) scaled
+        //                by LANE_WIDTH_SCALE so stop-line cars align with the
+        //                visual road entry; beyond nodeW shifted by the delta
+        //                for continuity (relative spacing preserved).
+        if (LANE_WIDTH_SCALE !== 1.0 && INTERSECTION_NODE_WIDTH > 0) {
+            let sx = rawX, sy = -rawY;                         // screen coords
+            let S   = LANE_WIDTH_SCALE;
+            let nW  = INTERSECTION_NODE_WIDTH;
+            let rfx = Math.cos(simAngle), rfy = -Math.sin(simAngle); // fwd
+            let rlx = Math.sin(simAngle), rly =  Math.cos(simAngle); // right lat
+            let along = sx * rfx + sy * rfy;
+            let lat   = sx * rlx + sy * rly;
+            let absA  = Math.abs(along), signA = along >= 0 ? 1 : -1;
+            let sAlong = absA <= nW
+                ? along * S
+                : signA * (nW * S + (absA - nW));
+            position = [sAlong * rfx + lat * S * rlx,
+                        sAlong * rfy + lat * S * rly];
+        } else {
+            position = transCoord([rawX, rawY]);
+        }
 
         // ── Compute visual dimensions (capped to prevent overlap) ───────────
         let visualLen, visualWid;
         if (CAR_SIZE_OVERRIDE) {
-            let safeL = _safeLen.get(carLog[3]) ?? Infinity;
-            visualLen = Math.min(length * CAR_LENGTH_CUSTOM, safeL);
-            visualWid = Math.min(width  * CAR_WIDTH_CUSTOM,  MIN_LANE_WIDTH);
+            visualLen = Math.min(length * CAR_LENGTH_CUSTOM, _globalSafeLen);
+            visualWid = width  * CAR_WIDTH_CUSTOM;
         } else {
             visualLen = length;
             visualWid = width;
@@ -808,7 +850,7 @@ function drawStep(step) {
         carPool[poolIdx][0].rotation = pixiRot;
         carPool[poolIdx][0].name = carLog[3];
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
-        carPool[poolIdx][0].tint = CAR_COLORS[carColorId];
+        carPool[poolIdx][0].tint = applyBrightness(CAR_COLORS[carColorId], CAR_BRIGHTNESS);
         carPool[poolIdx][0].width  = visualLen;
         carPool[poolIdx][0].height = visualWid;
         carContainer.addChild(carPool[poolIdx][0]);
@@ -886,6 +928,15 @@ function pixiToHex(color) {
     return '#' + color.toString(16).padStart(6, '0');
 }
 
+// Multiply each RGB channel by `brightness` (1.0 = original, <1 darker, >1 lighter)
+function applyBrightness(color, brightness) {
+    if (brightness === 1.0) return color;
+    let r = Math.min(255, Math.round(((color >> 16) & 0xff) * brightness));
+    let g = Math.min(255, Math.round(((color >>  8) & 0xff) * brightness));
+    let b = Math.min(255, Math.round(( color        & 0xff) * brightness));
+    return (r << 16) | (g << 8) | b;
+}
+
 function initSettings() {
     // --- Car Colors ---
     CAR_COLORS.forEach(function(color, i) {
@@ -910,6 +961,16 @@ function initSettings() {
     document.getElementById('car-width-input').addEventListener('input', function() {
         CAR_WIDTH_CUSTOM = parseFloat(this.value) || 1.0;
     });
+
+    // --- Car Brightness ---
+    let brightnessSlider = document.getElementById('car-brightness');
+    let brightnessVal    = document.getElementById('car-brightness-val');
+    if (brightnessSlider) {
+        brightnessSlider.addEventListener('input', function() {
+            CAR_BRIGHTNESS = this.value / 100;
+            brightnessVal.innerText = CAR_BRIGHTNESS.toFixed(2);
+        });
+    }
 
     // --- Lane Width Scale ---
     let laneScaleSlider = document.getElementById('lane-width-scale');
