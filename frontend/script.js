@@ -31,6 +31,7 @@ var CAR_SIZE_OVERRIDE = false;
 var CAR_LENGTH_CUSTOM = 1.0;   // multiplier (1.0 = simulation size)
 var CAR_WIDTH_CUSTOM  = 1.0;   // multiplier (1.0 = simulation size)
 var VEHICLE_DENSITY   = 1.0;   // 0.1 – 1.0  (fraction of vehicles to display)
+var MIN_LANE_WIDTH    = Infinity; // populated from roadnet; caps visual car width
 var LANE_DIVIDER_INSET = 0;    // perpendicular offset of divider line from lane boundary
 
 NUM_CAR_POOL = 150000;
@@ -363,6 +364,15 @@ function drawRoadnet() {
         }
         edges[edge.id] = edge;
     }
+
+    // Compute the minimum lane width so drawStep can cap visual car width
+    // to prevent cars from bleeding into adjacent lanes when size override is on.
+    MIN_LANE_WIDTH = Infinity;
+    for (let edgeId in edges) {
+        let lw = edges[edgeId].laneWidths;
+        if (lw) for (let w of lw) if (w < MIN_LANE_WIDTH) MIN_LANE_WIDTH = w;
+    }
+    if (!isFinite(MIN_LANE_WIDTH)) MIN_LANE_WIDTH = 4.0; // fallback
 
     /**
      * Draw Map
@@ -731,6 +741,43 @@ function drawStep(step) {
     turnSignalContainer.removeChildren();
     let carLog, position, length, width;
     let poolIdx = 0;   // separate pool pointer so density-skipped slots are reused
+
+    // ── Safe-size computation (only needed when override is active) ─────────
+    // Pass 1: collect raw positions/angles for ALL cars this step (no density
+    //         filter — hidden cars still occupy physical space).
+    // Pass 2: for each car find the closest co-directional neighbour
+    //         (angle mod π difference < 0.15 rad ≈ 8.6°).  The centre-to-centre
+    //         distance to that neighbour is the maximum safe visual length.
+    // Width is capped to MIN_LANE_WIDTH (smallest lane in the roadnet).
+    let _safeLen = null;
+    if (CAR_SIZE_OVERRIDE) {
+        let _px = [], _py = [], _pa = [], _pid = [];
+        for (let i = 0, len = carLogs.length - 1; i < len; i++) {
+            let p = carLogs[i].split(' ');
+            if (p.length < 4) continue;
+            _px.push(parseFloat(p[0]));
+            _py.push(parseFloat(p[1]));
+            _pa.push(parseFloat(p[2]));
+            _pid.push(p[3]);
+        }
+        _safeLen = new Map();
+        let n = _px.length;
+        for (let i = 0; i < n; i++) {
+            let best = Infinity;
+            for (let j = 0; j < n; j++) {
+                if (i === j) continue;
+                let da = Math.abs(_pa[i] - _pa[j]) % Math.PI;
+                if (da > Math.PI / 2) da = Math.PI - da; // fold to [0, π/2]
+                if (da > 0.15) continue;                  // skip cross-direction cars
+                let dx = _px[i] - _px[j], dy = _py[i] - _py[j];
+                let d = dx * dx + dy * dy;
+                if (d < best) best = d;
+            }
+            // Use 0.95 × centre-to-centre distance as max visual length
+            _safeLen.set(_pid[i], best === Infinity ? Infinity : Math.sqrt(best) * 0.95);
+        }
+    }
+
     for (let i = 0, len = carLogs.length - 1;i < len;++i) {
         carLog = carLogs[i].split(' ');
 
@@ -746,21 +793,32 @@ function drawStep(step) {
 
         let pixiRot = 2*Math.PI - parseFloat(carLog[2]);
 
+        // ── Compute visual dimensions (capped to prevent overlap) ───────────
+        let visualLen, visualWid;
+        if (CAR_SIZE_OVERRIDE) {
+            let safeL = _safeLen.get(carLog[3]) ?? Infinity;
+            visualLen = Math.min(length * CAR_LENGTH_CUSTOM, safeL);
+            visualWid = Math.min(width  * CAR_WIDTH_CUSTOM,  MIN_LANE_WIDTH);
+        } else {
+            visualLen = length;
+            visualWid = width;
+        }
+
         carPool[poolIdx][0].position.set(position[0], position[1]);
         carPool[poolIdx][0].rotation = pixiRot;
         carPool[poolIdx][0].name = carLog[3];
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
         carPool[poolIdx][0].tint = CAR_COLORS[carColorId];
-        carPool[poolIdx][0].width  = CAR_SIZE_OVERRIDE ? length * CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][0].height = CAR_SIZE_OVERRIDE ? width  * CAR_WIDTH_CUSTOM  : width;
+        carPool[poolIdx][0].width  = visualLen;
+        carPool[poolIdx][0].height = visualWid;
         carContainer.addChild(carPool[poolIdx][0]);
 
         let laneChange = parseInt(carLog[4]) + 1;
         carPool[poolIdx][1].position.set(position[0], position[1]);
         carPool[poolIdx][1].rotation = pixiRot;
         carPool[poolIdx][1].texture = turnSignalTextures[laneChange];
-        carPool[poolIdx][1].width  = CAR_SIZE_OVERRIDE ? length * CAR_LENGTH_CUSTOM : length;
-        carPool[poolIdx][1].height = CAR_SIZE_OVERRIDE ? width  * CAR_WIDTH_CUSTOM  : width;
+        carPool[poolIdx][1].width  = visualLen;
+        carPool[poolIdx][1].height = visualWid;
         turnSignalContainer.addChild(carPool[poolIdx][1]);
 
         poolIdx++;
