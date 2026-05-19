@@ -31,7 +31,8 @@ var CAR_SIZE_OVERRIDE = false;
 var CAR_LENGTH_CUSTOM = 1.0;   // multiplier (1.0 = simulation size)
 var CAR_WIDTH_CUSTOM  = 1.0;   // multiplier (1.0 = simulation size)
 var VEHICLE_DENSITY   = 1.0;   // 0.1 – 1.0  (fraction of vehicles to display)
-var CAR_BRIGHTNESS    = 1.0;   // 0.3 – 2.0  (colour brightness multiplier)
+var CAR_SATURATION    = 1.0;   // 0.0 = greyscale, 1.0 = original, >1 = vivid
+var CACHED_GLOBAL_SAFE_LEN = Infinity; // pre-computed once after simulation loads
 var MIN_LANE_WIDTH          = Infinity; // populated from roadnet; caps visual car width
 var INTERSECTION_NODE_WIDTH = 0;        // width of main intersection node
 var LANE_DIVIDER_INSET = 0;    // perpendicular offset of divider line from lane boundary
@@ -216,6 +217,7 @@ function start() {
                 }
                 ready = true;
                 loading = false;
+                computeGlobalSafeLen(); // pre-compute car size cap for all steps
                 infoAppend("Start replaying");
             }, 200);
         };
@@ -752,43 +754,6 @@ function drawStep(step) {
     let carLog, position, length, width;
     let poolIdx = 0;   // separate pool pointer so density-skipped slots are reused
 
-    // ── Global uniform safe-length cap (only when override is active) ────────
-    // Finds the shortest longitudinal (along-road) gap between any two same-
-    // direction, same-lane cars.  ALL cars are capped to that value so every
-    // car is the exact same visual size and none overlap.
-    // Lateral pairs (side-by-side in adjacent lanes) are excluded — they don't
-    // affect length overlap.
-    let _globalSafeLen = Infinity;
-    if (CAR_SIZE_OVERRIDE) {
-        let _px = [], _py = [], _pa = [];
-        for (let i = 0, len = carLogs.length - 1; i < len; i++) {
-            let p = carLogs[i].split(' ');
-            if (p.length < 4) continue;
-            _px.push(parseFloat(p[0]));
-            _py.push(parseFloat(p[1]));
-            _pa.push(parseFloat(p[2]));
-        }
-        let n = _px.length;
-        let _laneW = isFinite(MIN_LANE_WIDTH) ? MIN_LANE_WIDTH : 2.0;
-        for (let i = 0; i < n; i++) {
-            let rfx = Math.cos(_pa[i]), rfy = -Math.sin(_pa[i]); // forward (screen)
-            let rlx = Math.sin(_pa[i]), rly =  Math.cos(_pa[i]); // lateral (screen)
-            for (let j = 0; j < n; j++) {
-                if (i === j) continue;
-                // Same direction only (NOT opposite direction)
-                let da = Math.abs(_pa[i] - _pa[j]) % (2 * Math.PI);
-                if (da > Math.PI) da = 2 * Math.PI - da;
-                if (da > 0.3) continue;
-                let dx = _px[j] - _px[i], dy = _py[i] - _py[j]; // screen-space delta
-                let lon = dx * rfx + dy * rfy;  // longitudinal component
-                let lat = Math.abs(dx * rlx + dy * rly); // lateral component
-                if (lat > _laneW * 0.75) continue; // skip adjacent-lane pairs
-                if (lon <= 0) continue;             // only the car ahead matters
-                if (lon < _globalSafeLen) _globalSafeLen = lon;
-            }
-        }
-        _globalSafeLen *= 0.95;
-    }
 
     for (let i = 0, len = carLogs.length - 1;i < len;++i) {
         carLog = carLogs[i].split(' ');
@@ -827,9 +792,19 @@ function drawStep(step) {
             let along = sx * rfx + sy * rfy;
             let lat   = sx * rlx + sy * rly;
             let absA  = Math.abs(along), signA = along >= 0 ? 1 : -1;
-            let sAlong = absA <= nW
-                ? along * S
-                : signA * (nW * S + (absA - nW));
+            // Longitudinal: full scaling inside intersection zone (absA ≤ nW),
+            // smooth linear fade-out of the shift between nW and 2·nW, then
+            // NO shift beyond 2·nW — prevents cars being pushed past road ends.
+            let sAlong;
+            if (absA <= nW) {
+                sAlong = along * S;
+            } else if (absA <= 2 * nW) {
+                let t = (absA - nW) / nW;          // 0 at nW → 1 at 2·nW
+                let shift = nW * (S - 1) * (1 - t); // fades from full to 0
+                sAlong = along + signA * shift;
+            } else {
+                sAlong = along;                     // lateral scaling only
+            }
             position = [sAlong * rfx + lat * S * rlx,
                         sAlong * rfy + lat * S * rly];
         } else {
@@ -839,8 +814,8 @@ function drawStep(step) {
         // ── Compute visual dimensions (capped to prevent overlap) ───────────
         let visualLen, visualWid;
         if (CAR_SIZE_OVERRIDE) {
-            visualLen = Math.min(length * CAR_LENGTH_CUSTOM, _globalSafeLen);
-            visualWid = width  * CAR_WIDTH_CUSTOM;
+            visualLen = length * CAR_LENGTH_CUSTOM;                      // uniform length, no cap
+            visualWid = Math.min(width * CAR_WIDTH_CUSTOM, MIN_LANE_WIDTH); // cap to lane width
         } else {
             visualLen = length;
             visualWid = width;
@@ -850,7 +825,7 @@ function drawStep(step) {
         carPool[poolIdx][0].rotation = pixiRot;
         carPool[poolIdx][0].name = carLog[3];
         let carColorId = stringHash(carLog[3]) % CAR_COLORS_NUM;
-        carPool[poolIdx][0].tint = applyBrightness(CAR_COLORS[carColorId], CAR_BRIGHTNESS);
+        carPool[poolIdx][0].tint = applySaturation(CAR_COLORS[carColorId], CAR_SATURATION);
         carPool[poolIdx][0].width  = visualLen;
         carPool[poolIdx][0].height = visualWid;
         carContainer.addChild(carPool[poolIdx][0]);
@@ -928,13 +903,61 @@ function pixiToHex(color) {
     return '#' + color.toString(16).padStart(6, '0');
 }
 
-// Multiply each RGB channel by `brightness` (1.0 = original, <1 darker, >1 lighter)
-function applyBrightness(color, brightness) {
-    if (brightness === 1.0) return color;
-    let r = Math.min(255, Math.round(((color >> 16) & 0xff) * brightness));
-    let g = Math.min(255, Math.round(((color >>  8) & 0xff) * brightness));
-    let b = Math.min(255, Math.round(( color        & 0xff) * brightness));
+// Adjust colour saturation: 0 = greyscale, 1 = original, >1 = more vivid
+function applySaturation(color, saturation) {
+    if (saturation === 1.0) return color;
+    let r = (color >> 16) & 0xff;
+    let g = (color >>  8) & 0xff;
+    let b =  color        & 0xff;
+    // Luminance-weighted grey
+    let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    r = Math.min(255, Math.max(0, Math.round(gray + saturation * (r - gray))));
+    g = Math.min(255, Math.max(0, Math.round(gray + saturation * (g - gray))));
+    b = Math.min(255, Math.max(0, Math.round(gray + saturation * (b - gray))));
     return (r << 16) | (g << 8) | b;
+}
+
+// Pre-compute the global safe car length cap across a sample of replay steps.
+// Called once after simulation loads so car size stays consistent during replay.
+function computeGlobalSafeLen() {
+    CACHED_GLOBAL_SAFE_LEN = Infinity;
+    if (!logs || logs.length === 0) return;
+    let _laneW = isFinite(MIN_LANE_WIDTH) ? MIN_LANE_WIDTH : 2.0;
+    let stride = Math.max(1, Math.floor(logs.length / 30)); // sample ~30 steps
+    for (let s = 0; s < logs.length; s += stride) {
+        let parts = logs[s].split(';');
+        let carLogs = parts[0].split(',');
+        let _px = [], _py = [], _pa = [];
+        for (let i = 0, len = carLogs.length - 1; i < len; i++) {
+            let p = carLogs[i].split(' ');
+            if (p.length < 4) continue;
+            _px.push(parseFloat(p[0]));
+            _py.push(parseFloat(p[1]));
+            _pa.push(parseFloat(p[2]));
+        }
+        let n = _px.length;
+        for (let i = 0; i < n; i++) {
+            let rfx = Math.cos(_pa[i]), rfy = -Math.sin(_pa[i]);
+            let rlx = Math.sin(_pa[i]), rly =  Math.cos(_pa[i]);
+            for (let j = 0; j < n; j++) {
+                if (i === j) continue;
+                let da = Math.abs(_pa[i] - _pa[j]) % (2 * Math.PI);
+                if (da > Math.PI) da = 2 * Math.PI - da;
+                if (da > 0.3) continue;
+                let dx = _px[j] - _px[i], dy = _py[i] - _py[j];
+                let lon = dx * rfx + dy * rfy;
+                let lat = Math.abs(dx * rlx + dy * rly);
+                if (lat > _laneW * 0.75) continue;
+                if (lon <= 0) continue;
+                // Ignore physically-impossible gaps (cars already overlapping
+                // in simulation — happens in intersection turn manoeuvres)
+                if (lon < 4.0) continue;
+                if (lon < CACHED_GLOBAL_SAFE_LEN) CACHED_GLOBAL_SAFE_LEN = lon;
+            }
+        }
+    }
+    CACHED_GLOBAL_SAFE_LEN *= 0.95;
+    if (!isFinite(CACHED_GLOBAL_SAFE_LEN)) CACHED_GLOBAL_SAFE_LEN = Infinity;
 }
 
 function initSettings() {
@@ -962,13 +985,13 @@ function initSettings() {
         CAR_WIDTH_CUSTOM = parseFloat(this.value) || 1.0;
     });
 
-    // --- Car Brightness ---
-    let brightnessSlider = document.getElementById('car-brightness');
-    let brightnessVal    = document.getElementById('car-brightness-val');
-    if (brightnessSlider) {
-        brightnessSlider.addEventListener('input', function() {
-            CAR_BRIGHTNESS = this.value / 100;
-            brightnessVal.innerText = CAR_BRIGHTNESS.toFixed(2);
+    // --- Car Saturation ---
+    let satSlider = document.getElementById('car-saturation');
+    let satVal    = document.getElementById('car-saturation-val');
+    if (satSlider) {
+        satSlider.addEventListener('input', function() {
+            CAR_SATURATION = this.value / 100;
+            satVal.innerText = CAR_SATURATION.toFixed(2);
         });
     }
 
