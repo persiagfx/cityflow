@@ -812,28 +812,34 @@ function drawStep(step) {
         let pixiRot = 2*Math.PI - simAngle;
 
         // ── Lane-width position scaling ─────────────────────────────────────
-        // Roads are drawn wider (lanes × LANE_WIDTH_SCALE) so cars must move
-        // laterally to stay in their visual lane.  Cars that are INSIDE the
-        // intersection polygon (dist < nW from origin) are turning and their
-        // heading doesn't align with any road — we must NOT scale them or they
-        // fly into the grey corner areas.  We blend the scale smoothly from 1
-        // (at origin) to S (at 2×nW and beyond).
+        // When LANE_WIDTH_SCALE≠1, roads are drawn wider and cars must be
+        // repositioned.  ONLY scale cars travelling along a cardinal road
+        // direction (≈0°/90°/180°/270°).  Turning cars inside the intersection
+        // have diagonal headings — scaling them sends them into grey corners.
+        //
+        // For road-aligned cars:
+        //   absA ≤ nW  →  sAlong = along × S    (stop-line → visual road entry)
+        //   absA > nW  →  sAlong = along + nW×(S−1)  (constant shift on road)
+        //   lat        →  lat × S               (stay in correct visual lane)
         if (LANE_WIDTH_SCALE !== 1.0 && INTERSECTION_NODE_WIDTH > 0) {
             let sx = rawX, sy = -rawY;
             let S   = LANE_WIDTH_SCALE;
             let nW  = INTERSECTION_NODE_WIDTH;
             let rfx = Math.cos(simAngle), rfy = -Math.sin(simAngle);
             let rlx = Math.sin(simAngle), rly =  Math.cos(simAngle);
-            let along = sx * rfx + sy * rfy;
-            let lat   = sx * rlx + sy * rly;
-            // blend: 0 at origin/inside intersection, ramps to 1 at nW·S
-            // (the visual road-start position) so cars on roads get full
-            // lateral scaling while intersection cars don't fly to corners.
-            let dist = Math.sqrt(sx * sx + sy * sy);
-            let blend = Math.min(1, Math.max(0, (dist - nW) / (nW * (S - 1) + 0.001)));
-            let eS = 1 + (S - 1) * blend;  // effective scale: 1 → S
-            position = [along * rfx + lat * eS * rlx,
-                        along * rfy + lat * eS * rly];
+            // snap = distance from nearest 90° multiple (0 = cardinal, π/4 = diagonal)
+            let snap = ((simAngle % (Math.PI / 2)) + Math.PI / 2) % (Math.PI / 2);
+            let isOnRoad = snap < 0.25 || snap > Math.PI / 2 - 0.25; // ±14° tolerance
+            if (isOnRoad) {
+                let along = sx * rfx + sy * rfy;
+                let lat   = sx * rlx + sy * rly;
+                let absA  = Math.abs(along), signA = along >= 0 ? 1 : -1;
+                let sAlong = absA <= nW ? along * S : along + signA * nW * (S - 1);
+                position = [sAlong * rfx + lat * S * rlx,
+                            sAlong * rfy + lat * S * rly];
+            } else {
+                position = [sx, sy]; // turning — keep at sim position
+            }
         } else {
             position = transCoord([rawX, rawY]);
         }
