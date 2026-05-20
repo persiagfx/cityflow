@@ -31,8 +31,8 @@ var CAR_SIZE_OVERRIDE = false;
 var CAR_LENGTH_CUSTOM = 1.0;   // multiplier (1.0 = simulation size)
 var CAR_WIDTH_CUSTOM  = 1.0;   // multiplier (1.0 = simulation size)
 var VEHICLE_DENSITY   = 1.0;   // 0.1 – 1.0  (fraction of vehicles to display)
-var CAR_SATURATION    = 1.0;   // 0.0 = greyscale, 1.0 = original, >1 = vivid
-var CACHED_GLOBAL_SAFE_LEN = Infinity; // pre-computed once after simulation loads
+var CAR_SATURATION      = 1.0;   // 0.0 = greyscale, 1.0 = original, >1 = vivid
+var _stepSafeLenCache   = new Map(); // per-step safe-length cache (cleared on new sim)
 var MIN_LANE_WIDTH          = Infinity; // populated from roadnet; caps visual car width
 var INTERSECTION_NODE_WIDTH = 0;        // width of main intersection node
 var LANE_DIVIDER_INSET = 0;    // perpendicular offset of divider line from lane boundary
@@ -217,7 +217,7 @@ function start() {
                 }
                 ready = true;
                 loading = false;
-                computeGlobalSafeLen(); // pre-compute car size cap for all steps
+                _stepSafeLenCache.clear(); // reset per-step size cache for new simulation
                 infoAppend("Start replaying");
             }, 200);
         };
@@ -754,6 +754,45 @@ function drawStep(step) {
     let carLog, position, length, width;
     let poolIdx = 0;   // separate pool pointer so density-skipped slots are reused
 
+    // ── Per-step uniform safe-length cap ──────────────────────────────────
+    // All cars in this step share the same cap so they look identical in size.
+    // Result is cached per step-index so the O(n²) only runs once per step.
+    let _stepSafeLen = Infinity;
+    if (CAR_SIZE_OVERRIDE) {
+        if (_stepSafeLenCache.has(step)) {
+            _stepSafeLen = _stepSafeLenCache.get(step);
+        } else {
+            let _laneW = isFinite(MIN_LANE_WIDTH) ? MIN_LANE_WIDTH : 2.0;
+            let _px = [], _py = [], _pa = [];
+            for (let i = 0, len = carLogs.length - 1; i < len; i++) {
+                let p = carLogs[i].split(' ');
+                if (p.length < 4) continue;
+                _px.push(parseFloat(p[0]));
+                _py.push(parseFloat(p[1]));
+                _pa.push(parseFloat(p[2]));
+            }
+            let n = _px.length;
+            for (let i = 0; i < n; i++) {
+                let rfx = Math.cos(_pa[i]), rfy = -Math.sin(_pa[i]);
+                let rlx = Math.sin(_pa[i]), rly =  Math.cos(_pa[i]);
+                for (let j = 0; j < n; j++) {
+                    if (i === j) continue;
+                    let da = Math.abs(_pa[i] - _pa[j]) % (2 * Math.PI);
+                    if (da > Math.PI) da = 2 * Math.PI - da;
+                    if (da > 0.3) continue;
+                    let dx = _px[j] - _px[i], dy = _py[i] - _py[j];
+                    let lon = dx * rfx + dy * rfy;
+                    let lat = Math.abs(dx * rlx + dy * rly);
+                    if (lat > _laneW * 0.75) continue;
+                    if (lon < 4.0) continue;   // ignore physically-impossible gaps
+                    if (lon <= 0) continue;
+                    if (lon < _stepSafeLen) _stepSafeLen = lon;
+                }
+            }
+            _stepSafeLen = isFinite(_stepSafeLen) ? _stepSafeLen * 0.95 : Infinity;
+            _stepSafeLenCache.set(step, _stepSafeLen);
+        }
+    }
 
     for (let i = 0, len = carLogs.length - 1;i < len;++i) {
         carLog = carLogs[i].split(' ');
@@ -772,50 +811,40 @@ function drawStep(step) {
 
         let pixiRot = 2*Math.PI - simAngle;
 
-        // ── Lane-width position scaling ────────────────────────────────────
-        // When LANE_WIDTH_SCALE≠1 the roads are drawn wider/narrower but the
-        // simulation positions are unchanged.  We decompose each car's screen
-        // position into along-road and lateral components (relative to the
-        // nearest intersection centre at origin), then:
-        //   • lateral  – always scaled by LANE_WIDTH_SCALE so cars sit in
-        //                the correct visual lane.
-        //   • along    – within the intersection zone (|along| ≤ nodeW) scaled
-        //                by LANE_WIDTH_SCALE so stop-line cars align with the
-        //                visual road entry; beyond nodeW shifted by the delta
-        //                for continuity (relative spacing preserved).
+        // ── Lane-width position scaling ─────────────────────────────────────
+        // Roads are drawn wider (lanes × LANE_WIDTH_SCALE) so cars must move
+        // laterally to stay in their visual lane.  Cars that are INSIDE the
+        // intersection polygon (dist < nW from origin) are turning and their
+        // heading doesn't align with any road — we must NOT scale them or they
+        // fly into the grey corner areas.  We blend the scale smoothly from 1
+        // (at origin) to S (at 2×nW and beyond).
         if (LANE_WIDTH_SCALE !== 1.0 && INTERSECTION_NODE_WIDTH > 0) {
-            let sx = rawX, sy = -rawY;                         // screen coords
+            let sx = rawX, sy = -rawY;
             let S   = LANE_WIDTH_SCALE;
             let nW  = INTERSECTION_NODE_WIDTH;
-            let rfx = Math.cos(simAngle), rfy = -Math.sin(simAngle); // fwd
-            let rlx = Math.sin(simAngle), rly =  Math.cos(simAngle); // right lat
+            let rfx = Math.cos(simAngle), rfy = -Math.sin(simAngle);
+            let rlx = Math.sin(simAngle), rly =  Math.cos(simAngle);
             let along = sx * rfx + sy * rfy;
             let lat   = sx * rlx + sy * rly;
-            let absA  = Math.abs(along), signA = along >= 0 ? 1 : -1;
-            // Longitudinal: full scaling inside intersection zone (absA ≤ nW),
-            // smooth linear fade-out of the shift between nW and 2·nW, then
-            // NO shift beyond 2·nW — prevents cars being pushed past road ends.
-            let sAlong;
-            if (absA <= nW) {
-                sAlong = along * S;
-            } else if (absA <= 2 * nW) {
-                let t = (absA - nW) / nW;          // 0 at nW → 1 at 2·nW
-                let shift = nW * (S - 1) * (1 - t); // fades from full to 0
-                sAlong = along + signA * shift;
-            } else {
-                sAlong = along;                     // lateral scaling only
-            }
-            position = [sAlong * rfx + lat * S * rlx,
-                        sAlong * rfy + lat * S * rly];
+            // blend: 0 at origin/inside intersection, ramps to 1 at nW·S
+            // (the visual road-start position) so cars on roads get full
+            // lateral scaling while intersection cars don't fly to corners.
+            let dist = Math.sqrt(sx * sx + sy * sy);
+            let blend = Math.min(1, Math.max(0, (dist - nW) / (nW * (S - 1) + 0.001)));
+            let eS = 1 + (S - 1) * blend;  // effective scale: 1 → S
+            position = [along * rfx + lat * eS * rlx,
+                        along * rfy + lat * eS * rly];
         } else {
             position = transCoord([rawX, rawY]);
         }
 
-        // ── Compute visual dimensions (capped to prevent overlap) ───────────
+        // ── Compute visual dimensions ────────────────────────────────────────
         let visualLen, visualWid;
         if (CAR_SIZE_OVERRIDE) {
-            visualLen = length * CAR_LENGTH_CUSTOM;                      // uniform length, no cap
-            visualWid = Math.min(width * CAR_WIDTH_CUSTOM, MIN_LANE_WIDTH); // cap to lane width
+            // Length: uniform across all cars in this step (stepSafeLen pre-computed above)
+            visualLen = Math.min(length * CAR_LENGTH_CUSTOM, _stepSafeLen);
+            // Width: cap to lane width so cars never spill into adjacent lane
+            visualWid = Math.min(width * CAR_WIDTH_CUSTOM, MIN_LANE_WIDTH);
         } else {
             visualLen = length;
             visualWid = width;
@@ -917,48 +946,6 @@ function applySaturation(color, saturation) {
     return (r << 16) | (g << 8) | b;
 }
 
-// Pre-compute the global safe car length cap across a sample of replay steps.
-// Called once after simulation loads so car size stays consistent during replay.
-function computeGlobalSafeLen() {
-    CACHED_GLOBAL_SAFE_LEN = Infinity;
-    if (!logs || logs.length === 0) return;
-    let _laneW = isFinite(MIN_LANE_WIDTH) ? MIN_LANE_WIDTH : 2.0;
-    let stride = Math.max(1, Math.floor(logs.length / 30)); // sample ~30 steps
-    for (let s = 0; s < logs.length; s += stride) {
-        let parts = logs[s].split(';');
-        let carLogs = parts[0].split(',');
-        let _px = [], _py = [], _pa = [];
-        for (let i = 0, len = carLogs.length - 1; i < len; i++) {
-            let p = carLogs[i].split(' ');
-            if (p.length < 4) continue;
-            _px.push(parseFloat(p[0]));
-            _py.push(parseFloat(p[1]));
-            _pa.push(parseFloat(p[2]));
-        }
-        let n = _px.length;
-        for (let i = 0; i < n; i++) {
-            let rfx = Math.cos(_pa[i]), rfy = -Math.sin(_pa[i]);
-            let rlx = Math.sin(_pa[i]), rly =  Math.cos(_pa[i]);
-            for (let j = 0; j < n; j++) {
-                if (i === j) continue;
-                let da = Math.abs(_pa[i] - _pa[j]) % (2 * Math.PI);
-                if (da > Math.PI) da = 2 * Math.PI - da;
-                if (da > 0.3) continue;
-                let dx = _px[j] - _px[i], dy = _py[i] - _py[j];
-                let lon = dx * rfx + dy * rfy;
-                let lat = Math.abs(dx * rlx + dy * rly);
-                if (lat > _laneW * 0.75) continue;
-                if (lon <= 0) continue;
-                // Ignore physically-impossible gaps (cars already overlapping
-                // in simulation — happens in intersection turn manoeuvres)
-                if (lon < 4.0) continue;
-                if (lon < CACHED_GLOBAL_SAFE_LEN) CACHED_GLOBAL_SAFE_LEN = lon;
-            }
-        }
-    }
-    CACHED_GLOBAL_SAFE_LEN *= 0.95;
-    if (!isFinite(CACHED_GLOBAL_SAFE_LEN)) CACHED_GLOBAL_SAFE_LEN = Infinity;
-}
 
 function initSettings() {
     // --- Car Colors ---
